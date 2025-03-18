@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Inventory Table</title>
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.11.5/css/jquery.dataTables.min.css" />
+</head>
+<body>
+    <table id="inventory-table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Series Code</th>
+                <th>Series Description</th>
+                <th>Pallet ID</th>
+                <th>Item ID</th>
+                <th>Publisher</th>
+                <th>Price (USD)</th>
+                <th>Quantity</th>
+            </tr>
+        </thead>
+    </table>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            $('#inventory-table').DataTable({
+                ajax: '/items',
+                columns: [
+                    { data: 'id' },
+                    { data: 'series_code' },
+                    { data: 'series_desc' },
+                    { data: 'pallet_id' },
+                    { data: 'item_id' },
+                    { data: 'publisher_desc' },
+                    { data: 'us_price' },
+                    { data: 'quantity' }
+                ]
+            });
+        });
+    </script>
+</body>
+</html>

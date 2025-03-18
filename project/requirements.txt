@@ -1,0 +1,8 @@
+Flask
+Flask-SQLAlchemy
+Flask-Cors
+psycopg2
+python-dotenv
+supabase 
+pandas
+numpy
