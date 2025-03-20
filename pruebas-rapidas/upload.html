@@ -1,0 +1,55 @@
+
+        
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>Subir Archivo a Supabase</title>
+      <!-- ✅ Cargar la librería de Supabase correctamente -->
+      <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    </head>
+    <body>
+      <h2>Subir Archivo a Supabase</h2>
+      <input type="file" id="fileInput" />
+      <button onclick="uploadFile()">Subir Archivo</button>
+      <p id="message"></p>
+    
+      <script>
+        // ✅ Definir `supabase` correctamente con la sintaxis adecuada
+        const SUPABASE_URL = "https://ieujngazvobampsyaiqo.supabase.co";
+        const SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldWpuZ2F6dm9iYW1wc3lhaXFvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjIyNzkyNSwiZXhwIjoyMDU3ODAzOTI1fQ.Y5ATWRMc__59QTUAndqcdVyVCL5sdiK9qFW2zNZ6t0k";    
+    
+        // ⚠️ Error común: Estás usando supabase antes de definirlo.
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_API_KEY);
+    
+        async function uploadFile() {
+          const fileInput = document.getElementById("fileInput");
+          const message = document.getElementById("message");
+    
+          if (!fileInput.files.length) {
+            message.textContent = "⚠️ Selecciona un archivo";
+            return;
+          }
+    
+          const file = fileInput.files[0];
+          const filePath = `uploads/${file.name}`; // Ruta en Supabase Storage
+    
+          try {
+            // 📤 Subir el archivo directamente desde el frontend
+            const { data, error } = await supabase.storage.from("uploads").upload(filePath, file);
+    
+            if (error) {
+              message.textContent = `❌ Error: ${error.message}`;
+              return;
+            }
+    
+            message.textContent = `✅ Archivo subido correctamente: ${file.name}`;
+          } catch (error) {
+            message.textContent = `❌ Error: ${error.message}`;
+          }
+        }
+      </script>
+    </body>
+    </html>
+    

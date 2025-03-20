@@ -6,3 +6,8 @@ python-dotenv
 supabase 
 pandas
 numpy
+flask 
+openpyxl  
+PyMuPDF 
+openpyxl
+psycopg2-binary
