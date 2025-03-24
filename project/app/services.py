@@ -78,8 +78,9 @@ def createPdf(extendedpercent):
     #en el archivo pdf debe estar la sumatoria de todos los precios con el descuento aplicado
     return
 
-def createCsv()
-    item_id="" 
+def createCsv():
+    item_id(ISBN)=""
+    Title="" 
     quantity=""
     #esta planeado para que saque el conteo de cada item_id independientemente de en que pallet esté y lo guarde en un csv
     return
