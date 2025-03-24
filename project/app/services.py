@@ -69,28 +69,17 @@ def process_file(input_file):
     except Exception as e:
         return {"error": str(e)}
 
-def upload_csv_to_supabase(csv_file_path):
-    try:
-        df = pd.read_csv(csv_file_path)
+def createPdf(extendedpercent):
+    palle_id=""
+    series_desc=""
+    quantity=""
+    extended="" #la sumatoria de los precios
+    extendedpercent="" #porcentaje de descuento, entregado por el usuario no en el archivo
+    #en el archivo pdf debe estar la sumatoria de todos los precios con el descuento aplicado
+    return
 
-        columnas = ["series_code", "series_desc", "pallet_id", "pallet_available_flag", "item_id", "item_desc", 
-                    "family_code", "reporting_group_desc", "publisher_desc", "imprint_desc", "us_price", "can_price", 
-                    "pub_date", "quantity", "Extended Retail", "Extended @ 3%"]
-
-        numeric_columns = ["series_code", "item_id", "family_code", "us_price", "can_price", "quantity", "Extended Retail", "Extended @ 3%"]
-
-        # Convertir las columnas numéricas
-        df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric, errors='coerce')
-
-        data_to_insert = df.to_dict(orient='records')
-
-        # Insertar los datos en Supabase
-        response = supabase.table('inventory').insert(data_to_insert).execute()
-
-        if response.data:
-            print("Datos insertados correctamente en la base de datos.")
-        else:
-            print(f"Error al insertar los datos: {response}")
-
-    except Exception as e:
-        print(f"Error al subir el archivo CSV: {str(e)}")
+def createCsv()
+    item_id="" 
+    quantity=""
+    #esta planeado para que saque el conteo de cada item_id independientemente de en que pallet esté y lo guarde en un csv
+    return
