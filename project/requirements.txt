@@ -12,3 +12,5 @@ PyMuPDF
 openpyxl
 psycopg2-binary
 requests
+reportlab
+flask_cors
