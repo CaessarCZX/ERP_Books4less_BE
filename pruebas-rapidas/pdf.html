@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generar PDF</title>
+    <script>
+        async function submitForm(event) {
+            event.preventDefault(); // Evita la recarga de la página
+
+            const formData = {
+                user_id: document.getElementById('user_id').value, // Asegúrate de que este campo exista
+                purchase_info: document.getElementById('purchase_info').value,
+                order_date: document.getElementById('order_date').value,
+                seller_name: document.getElementById('seller_name').value,
+                seller_PO: document.getElementById('seller_PO').value,
+                seller_address: document.getElementById('seller_address').value,
+                company_name: document.getElementById('company_name').value,
+                company_address: document.getElementById('company_address').value,
+                company_info: document.getElementById('company_info').value,
+                shipping_method: document.getElementById('shipping_method').value,
+                payment_terms: document.getElementById('payment_terms').value,
+                discount_rate: document.getElementById('discount_rate').value,
+            };
+
+            // Asegurarse de que todos los campos sean válidos
+            if (!formData.user_id || !formData.purchase_info || !formData.order_date || !formData.seller_name || !formData.seller_PO) {
+                alert("Por favor, complete todos los campos requeridos.");
+                return;
+            }
+
+            try {
+                const response = await fetch('http://127.0.0.1:5000/api/create-pdf', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData),
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert(result.message);
+                } else {
+                    alert(`Error: ${result.error}`);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error al enviar los datos. Verifica tu conexión o los datos ingresados.');
+            }
+        }
+    </script>
+</head>
+<body>
+    <h1>Generar PDF</h1>
+    <!-- Incluye un campo hidden para user_id -->
+    <input type="hidden" id="user_id" value="12345">
+    <form onsubmit="submitForm(event)">
+        <label for="purchase_info">Purchase Info:</label><br>
+        <input type="text" id="purchase_info" name="purchase_info" required><br><br>
+
+        <label for="order_date">Order Date:</label><br>
+        <input type="date" id="order_date" name="order_date" required><br><br>
+
+        <label for="seller_name">Seller Name:</label><br>
+        <input type="text" id="seller_name" name="seller_name" required><br><br>
+
+        <label for="seller_PO">Seller PO:</label><br>
+        <input type="text" id="seller_PO" name="seller_PO" required><br><br>
+
+        <label for="seller_address">Seller Address:</label><br>
+        <textarea id="seller_address" name="seller_address" rows="3" required></textarea><br><br>
+
+        <label for="company_name">Company Name:</label><br>
+        <input type="text" id="company_name" name="company_name" required><br><br>
+
+        <label for="company_address">Company Address:</label><br>
+        <textarea id="company_address" name="company_address" rows="3" required></textarea><br><br>
+
+        <label for="company_info">Company Info:</label><br>
+        <textarea id="company_info" name="company_info" rows="3" required></textarea><br><br>
+
+        <label for="shipping_method">Shipping Method:</label><br>
+        <input type="text" id="shipping_method" name="shipping_method" required><br><br>
+
+        <label for="payment_terms">Payment Terms:</label><br>
+        <input type="text" id="payment_terms" name="payment_terms" required><br><br>
+
+        <label for="discount_rate">Discount Rate (%):</label><br>
+        <input type="number" id="discount_rate" name="discount_rate" step="0.01" required><br><br>
+
+        <button type="submit">Generar PDF</button>
+    </form>
+</body>
+</html>

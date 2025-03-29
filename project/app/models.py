@@ -1,4 +1,6 @@
-from . import db
+from datetime import datetime
+from app import db
+
 
 class Inventory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -18,3 +20,14 @@ class Inventory(db.Model):
     quantity = db.Column(db.Integer, nullable=False)
     extended_retail = db.Column(db.Float)
     extended_percent = db.Column(db.Float)
+
+class UserFiles(db.Model):
+    __tablename__ = 'user_files'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String(50), nullable=False)
+    filename = db.Column(db.String(255), nullable=False)
+    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<UserFile {self.filename}>"

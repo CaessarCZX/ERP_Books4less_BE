@@ -1,55 +1,104 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Subir Archivos a Supabase</title>
+  <style>
+    #fileList {
+      margin-top: 10px;
+      padding: 0;
+      list-style: none;
+    }
+    #fileList li {
+      margin-bottom: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h2>Subir Archivos a Supabase</h2>
+  <form id="uploadForm" enctype="multipart/form-data">
+    <input type="hidden" id="user_id" name="user_id" value="12345">
+    <input type="file" id="file" name="file" multiple>
+    <ul id="fileList"></ul>
+    <button type="submit">Subir archivos</button>
+  </form>
 
-        
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>Subir Archivo a Supabase</title>
-      <!-- ✅ Cargar la librería de Supabase correctamente -->
-      <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    </head>
-    <body>
-      <h2>Subir Archivo a Supabase</h2>
-      <input type="file" id="fileInput" />
-      <button onclick="uploadFile()">Subir Archivo</button>
-      <p id="message"></p>
-    
-      <script>
-        // ✅ Definir `supabase` correctamente con la sintaxis adecuada
-        const SUPABASE_URL = "https://ieujngazvobampsyaiqo.supabase.co";
-        const SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldWpuZ2F6dm9iYW1wc3lhaXFvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjIyNzkyNSwiZXhwIjoyMDU3ODAzOTI1fQ.Y5ATWRMc__59QTUAndqcdVyVCL5sdiK9qFW2zNZ6t0k";    
-    
-        // ⚠️ Error común: Estás usando supabase antes de definirlo.
-        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_API_KEY);
-    
-        async function uploadFile() {
-          const fileInput = document.getElementById("fileInput");
-          const message = document.getElementById("message");
-    
-          if (!fileInput.files.length) {
-            message.textContent = "⚠️ Selecciona un archivo";
-            return;
-          }
-    
-          const file = fileInput.files[0];
-          const filePath = `uploads/${file.name}`; // Ruta en Supabase Storage
-    
-          try {
-            // 📤 Subir el archivo directamente desde el frontend
-            const { data, error } = await supabase.storage.from("uploads").upload(filePath, file);
-    
-            if (error) {
-              message.textContent = `❌ Error: ${error.message}`;
-              return;
-            }
-    
-            message.textContent = `✅ Archivo subido correctamente: ${file.name}`;
-          } catch (error) {
-            message.textContent = `❌ Error: ${error.message}`;
-          }
+  <p id="message" style="white-space: pre-wrap;"></p>
+
+  <script>
+    // Actualiza la lista de archivos seleccionados
+    const fileInput = document.getElementById('file');
+    const fileList = document.getElementById('fileList');
+
+    fileInput.addEventListener('change', () => {
+      // Limpiar lista actual
+      fileList.innerHTML = "";
+      const files = fileInput.files;
+      if (files.length === 0) {
+        const li = document.createElement('li');
+        li.textContent = "No se han seleccionado archivos.";
+        fileList.appendChild(li);
+      } else {
+        for (let i = 0; i < files.length; i++) {
+          const li = document.createElement('li');
+          li.textContent = files[i].name;
+          fileList.appendChild(li);
         }
-      </script>
-    </body>
-    </html>
-    
+      }
+    });
+
+    // Manejar el envío del formulario
+    document.getElementById('uploadForm').addEventListener('submit', async (event) => {
+      event.preventDefault(); // Evitar recarga de página
+
+      const userId = document.getElementById('user_id').value;
+      const files = fileInput.files;
+
+      if (!files.length) {
+        document.getElementById('message').textContent = "Por favor, selecciona al menos un archivo.";
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('user_id', userId);
+
+      // Agregar cada archivo al FormData
+      for (const file of files) {
+        formData.append('file', file);
+      }
+
+      try {
+        const response = await fetch('http://127.0.0.1:5000/upload', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP Error: ${response.status}`);
+        }
+
+        const result = await response.json();
+        
+        // Suponiendo que el servidor devuelve uploaded_files, duplicate_files y errors
+        let message = "Resultado de la subida:\n";
+        if (result.uploaded_files && result.uploaded_files.length > 0) {
+          message += `Archivos subidos con éxito: ${result.uploaded_files.join(', ')}\n`;
+        }
+        if (result.duplicate_files && result.duplicate_files.length > 0) {
+          message += `Archivos duplicados (no se subieron): ${result.duplicate_files.join(', ')}\n`;
+        }
+        if (result.errors && result.errors.length > 0) {
+          message += "Errores:\n";
+          result.errors.forEach((error) => {
+            message += `- Archivo: ${error.file}, Error: ${error.error}\n`;
+          });
+        }
+        document.getElementById('message').textContent = message;
+      } catch (error) {
+        document.getElementById('message').textContent = `Error: ${error.message}`;
+      }
+    });
+  </script>
+</body>
+</html>
