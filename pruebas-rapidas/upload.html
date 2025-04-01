@@ -18,13 +18,15 @@
 <body>
   <h2>Subir Archivos a Supabase</h2>
   <form id="uploadForm" enctype="multipart/form-data">
-    <input type="hidden" id="user_id" name="user_id" value="12345">
+    <input type="hidden" id="user_id" name="user_id" value="12345miguel">
     <input type="file" id="file" name="file" multiple>
     <ul id="fileList"></ul>
     <button type="submit">Subir archivos</button>
   </form>
 
   <p id="message" style="white-space: pre-wrap;"></p>
+  <button id="generateCsv">Generar CSV</button>
+<a id="downloadCsv" style="display: none;">Descargar CSV</a>
 
   <script>
     // Actualiza la lista de archivos seleccionados
@@ -98,6 +100,33 @@
       } catch (error) {
         document.getElementById('message').textContent = `Error: ${error.message}`;
       }
+    });
+
+
+    //procesar el csv subido a supabase
+    document.getElementById('generateCsv').addEventListener('click', async () => {
+    const userId = document.getElementById('user_id').value;
+
+    try {
+        const response = await fetch('http://127.0.0.1:5000/api/create-csv', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ user_id: userId }),
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.error || `Error HTTP: ${response.status}`);
+        }
+
+        alert(result.message || "CSV generado con éxito.");
+
+    } catch (error) {
+        alert(`Error al generar el CSV: ${error.message}`);
+    }
     });
   </script>
 </body>

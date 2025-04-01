@@ -191,15 +191,76 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
         return {"error": str(e)}
 
 
+# def create_csv(input_file, output_csv):
+#     """Crea un CSV con el conteo de 'item_id'."""
+#     try:
+#         df = pd.read_csv(input_file)
+#         grouped = df.groupby("item_id").agg({
+#             "series_desc": "first",
+#             "quantity": "sum"
+#         }).reset_index()
+#         grouped.to_csv(output_csv, index=False)
+#         return {"message": f"CSV creado exitosamente: {output_csv}"}
+#     except Exception as e:
+#         return {"error": str(e)}
+
 def create_csv(input_file, output_csv):
-    """Crea un CSV con el conteo de 'item_id'."""
+    """
+    Crea un CSV agrupado por 'item_id' e 'item_desc', sumando la 'quantity',
+    formateando 'item_id' sin notación científica y asegurando que no se repitan.
+    """
     try:
-        df = pd.read_csv(input_file)
-        grouped = df.groupby("item_id").agg({
-            "series_desc": "first",
-            "quantity": "sum"
-        }).reset_index()
-        grouped.to_csv(output_csv, index=False)
+        import pandas as pd
+        import os
+
+        # Leer el archivo según su extensión
+        file_extension = os.path.splitext(input_file)[1].lower()
+        if file_extension == ".xlsx":
+            df = pd.read_excel(input_file, sheet_name=0, engine="openpyxl")
+        elif file_extension == ".csv":
+            df = pd.read_csv(input_file, delimiter=",")
+        else:
+            return {"error": "Formato de archivo no soportado"}
+
+        # Asegurarse de que 'item_id' se trate como número para luego formatearlo
+        if 'item_id' in df.columns:
+            # Si el item_id viene como número, lo convertimos a string sin notación científica
+            def format_item_id(x):
+                try:
+                    # Se convierte a float y luego a entero, asumiendo que es un identificador sin decimales
+                    return str(int(float(x)))
+                except:
+                    return str(x)
+
+            df['item_id'] = df['item_id'].apply(format_item_id)
+        else:
+            return {"error": "No se encontró la columna 'item_id' en el archivo."}
+
+        # Renombrar 'series_desc' a 'item_desc' si es necesario
+        if 'series_desc' in df.columns and 'item_desc' not in df.columns:
+            df.rename(columns={'series_desc': 'item_desc'}, inplace=True)
+        
+        if 'item_desc' not in df.columns:
+            return {"error": "No se encontró la columna 'item_desc' en el archivo."}
+
+        # Asegurarse de que 'quantity' sea numérica y reemplazar NaN por 0
+        if 'quantity' in df.columns:
+            df['quantity'] = pd.to_numeric(df['quantity'], errors='coerce').fillna(0)
+        else:
+            return {"error": "No se encontró la columna 'quantity' en el archivo."}
+
+        # Eliminar la columna 'Extended Retail' si existe
+        if 'Extended Retail' in df.columns:
+            df.drop(columns=['Extended Retail'], inplace=True)
+
+        # Agrupar por 'item_id' e 'item_desc', sumando 'quantity'
+        grouped_df = df.groupby(['item_id', 'item_desc'], as_index=False)['quantity'].sum()
+
+        # Guardar el CSV resultante sin índices
+        grouped_df.to_csv(output_csv, index=False)
+
         return {"message": f"CSV creado exitosamente: {output_csv}"}
+
     except Exception as e:
         return {"error": str(e)}
+

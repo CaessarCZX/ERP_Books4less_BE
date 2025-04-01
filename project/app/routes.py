@@ -207,6 +207,7 @@ def generate_csv():
         # Descargar el archivo si no existe localmente
         if not os.path.exists(local_file_path):
             download_result = download_file(f"uploads/{user_id}/{latest_file}")
+            print("Resultado de la descarga:", download_result)
             if isinstance(download_result, dict) and "error" in download_result:
                 return jsonify(download_result), 500
             local_file_path = download_result
