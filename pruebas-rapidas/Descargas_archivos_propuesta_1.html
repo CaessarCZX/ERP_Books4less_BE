@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mis Archivos</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            margin-bottom: 20px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px 15px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        .file-item {
+            margin: 10px 0;
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 4px;
+        }
+        .loading {
+            display: none;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Mis Archivos</h1>
+    
+    <div class="container">
+        <h2>Buscar mis archivos</h2>
+        <input type="text" id="userId" placeholder="Ingresa tu ID de usuario" required>
+        <button onclick="getMyFiles()">Buscar</button>
+        <div id="loading" class="loading">Cargando...</div>
+        <div id="fileList"></div>
+    </div>
+
+    <script>
+        function getMyFiles() {
+            const userId = document.getElementById('userId').value;
+            const fileListDiv = document.getElementById('fileList');
+            const loadingDiv = document.getElementById('loading');
+            
+            if (!userId) {
+                fileListDiv.innerHTML = '<p style="color:red;">Debes ingresar tu ID de usuario</p>';
+                return;
+            }
+            
+            fileListDiv.innerHTML = '';
+            loadingDiv.style.display = 'block';
+            
+            axios.get(`http://127.0.0.1:5000/api/user-files?user_id=${userId}`)
+            .then(response => {
+                loadingDiv.style.display = 'none';
+                const files = response.data.files || [];
+                
+                if (files.length === 0) {
+                    fileListDiv.innerHTML = '<p>No tienes archivos subidos aún.</p>';
+                    return;
+                }
+                
+                let html = '<h3>Tus archivos:</h3>';
+                files.forEach(file => {
+                    const uploadDate = file.uploaded_at ? new Date(file.uploaded_at).toLocaleString() : 'Fecha desconocida';
+                    
+                    html += `
+                        <div class="file-item">
+                            <p><strong>Archivo:</strong> ${file.filename}</p>
+                            <p><strong>Subido:</strong> ${uploadDate}</p>
+                            <p><strong>Tipo:</strong> ${file.file_type || 'N/A'}</p>
+                            <button onclick="downloadFile('${file.id}', '${file.filename}')">Descargar</button>
+                        </div>
+                    `;
+                });
+                
+                fileListDiv.innerHTML = html;
+            })
+            .catch(error => {
+                loadingDiv.style.display = 'none';
+                const errorMsg = error.response?.data?.error || error.message;
+                fileListDiv.innerHTML = `<p style="color:red;">Error: ${errorMsg}</p>`;
+            });
+        }
+
+        function downloadFile(fileId, filename) {
+            axios.get(`http://127.0.0.1:5000/api/download/${fileId}`, {
+                responseType: 'blob'
+            })
+            .then(response => {
+                const url = window.URL.createObjectURL(new Blob([response.data]));
+                const link = document.createElement('a');
+                link.href = url;
+                link.setAttribute('download', filename);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            })
+            .catch(error => {
+                alert('Error al descargar el archivo: ' + (error.response?.data?.error || error.message));
+            });
+        }
+    </script>
+</body>
+</html>

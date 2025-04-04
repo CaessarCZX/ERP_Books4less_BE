@@ -1,242 +1,288 @@
-from flask import Blueprint, jsonify, request
-from app.services import download_file, process_file, create_pdf, upload_to_supabase, create_csv, delete_old_files
+from flask import Blueprint, jsonify, request, send_file
+from app.services import upload_to_supabase, download_file_from_supabase, process_file, create_pdf, create_csv, delete_old_files
 from app import db
-from app.models import Inventory, UserFiles  # UserFiles debe ser un modelo para registrar los archivos subidos
-from app.models import Inventory
+from app.models import UserFiles
 import os
 import uuid
 import traceback
-from werkzeug.utils import secure_filename
+import pandas as pd
 from datetime import datetime
-
-
+from werkzeug.utils import secure_filename
 
 main = Blueprint('main', __name__)
 
+# Carpetas locales (no se modifican)
 DOWNLOAD_FOLDER = "downloads"
+UPLOAD_FOLDER = "uploads"
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-UPLOAD_FOLDER = "uploads"  # Carpeta donde se guardarán los archivos temporalmente
-
-# Asegúrate de que la carpeta de subida exista
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-
-@main.route('/upload', methods=['POST'])
-def upload_files():
-    """Permite subir múltiples archivos asociados a un usuario, 
-    asegurando que no se suban archivos duplicados para el mismo usuario."""
+# Limpieza de archivos antiguos
+delete_old_files()
+@main.route('/api/user-files', methods=['GET'])
+def get_user_files():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'user_id is required'}), 400
+    
+    # Filtros adicionales
+    file_type = request.args.get('file_type')
+    from_date = request.args.get('from_date')
+    to_date = request.args.get('to_date')
+    
     try:
+        query = UserFiles.query.filter_by(user_id=user_id)
+        
+        if file_type:
+            query = query.filter(UserFiles.file_type.ilike(f"%{file_type}%"))
+        
+        if from_date:
+            query = query.filter(UserFiles.uploaded_at >= from_date)
+            
+        if to_date:
+            query = query.filter(UserFiles.uploaded_at <= to_date)
+        
+        files = query.order_by(UserFiles.uploaded_at.desc()).all()
+        
+        files_data = [{
+            'id': file.id,
+            'filename': file.filename,
+            'uploaded_at': file.uploaded_at.isoformat() if file.uploaded_at else None,
+            'file_type': file.file_type
+        } for file in files]
+        
+        return jsonify({'files': files_data})
+    except Exception as e:
+        current_app.logger.error(f"Error getting user files: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+@main.route('/download/pdf', methods=['GET'])
+def download_pdf():
+    """
+    Endpoint para descargar un PDF subido.
+    Se espera recibir el parámetro 'filename' en la query string.
+    Ejemplo: /download/pdf?filename=1234_20250403_131200_output.pdf
+    """
+    filename = request.args.get('filename')
+    if not filename:
+        return jsonify({"error": "Parámetro 'filename' no proporcionado."}), 400
+
+    file_path = os.path.join(DOWNLOAD_FOLDER, filename)
+    if not os.path.exists(file_path):
+        # También se puede intentar descargar desde Supabase si el archivo no está local
+        download_result = download_file_from_supabase(f"pdf/{filename}")
+        if isinstance(download_result, dict) and "error" in download_result:
+            return jsonify(download_result), 500
+        file_path = download_result
+
+    try:
+        return send_file(file_path, as_attachment=True)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@main.route('/download/csv', methods=['GET'])
+def download_csv():
+    """
+    Endpoint para descargar un CSV subido.
+    Se espera recibir el parámetro 'filename' en la query string.
+    Ejemplo: /download/csv?filename=1234_20250403_131200_output.csv
+    """
+    filename = request.args.get('filename')
+    if not filename:
+        return jsonify({"error": "Parámetro 'filename' no proporcionado."}), 400
+
+    file_path = os.path.join(DOWNLOAD_FOLDER, filename)
+    if not os.path.exists(file_path):
+        # También se puede intentar descargar desde Supabase si el archivo no está local
+        download_result = download_file_from_supabase(f"csv/{filename}")
+        if isinstance(download_result, dict) and "error" in download_result:
+            return jsonify(download_result), 500
+        file_path = download_result
+
+    try:
+        return send_file(file_path, as_attachment=True)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+    
+def consolidate_files(file_paths, user_id):
+    """
+    Lee todos los archivos en file_paths (soportados: CSV y XLSX),
+    los concatena en un único DataFrame y lo guarda en un archivo Excel temporal.
+    Se usa para consolidar los datos de múltiples archivos.
+    """
+    dfs = []
+    for path in file_paths:
+        try:
+            ext = os.path.splitext(path)[1].lower()
+            if ext == ".xlsx":
+                df = pd.read_excel(path, engine="openpyxl")
+            elif ext == ".csv":
+                # Intentamos leer el CSV de varias maneras
+                try:
+                    df = pd.read_csv(path, delimiter=",", engine="python")
+                except Exception as e:
+                    try:
+                        df = pd.read_csv(path, delimiter=";", engine="python")
+                    except Exception as e:
+                        print(f"Error leyendo {path}: {e}")
+                        continue
+            else:
+                continue
+            dfs.append(df)
+        except Exception as e:
+            print(f"Error leyendo {path}: {e}")
+            continue
+    if not dfs:
+        return None, "No se pudo leer ningún archivo válido."
+    consolidated_df = pd.concat(dfs, ignore_index=True)
+    consolidated_file = os.path.join(DOWNLOAD_FOLDER, f"{user_id}_consolidated.xlsx")
+    consolidated_df.to_excel(consolidated_file, index=False)
+    return consolidated_file, None
+
+@main.route('/api/process-all', methods=['POST'])
+def process_all():
+    """
+    Ruta unificada que:
+      - Recibe múltiples archivos y datos del formulario.
+      - Sube cada archivo a Supabase y lo registra en la BD.
+      - Consolida los datos de todos los archivos en un único archivo Excel.
+      - A partir de ese archivo consolidado genera el CSV y el PDF usando las funciones
+        create_csv y create_pdf (definidas en services.py) sin alterar su lógica.
+      - Sube los archivos generados (CSV y PDF) a Supabase y retorna sus nombres.
+    """
+    try:
+        # Validar campos obligatorios
         user_id = request.form.get('user_id')
-        files = request.files.getlist('file')  # Obtener todos los archivos
+        discount_rate = request.form.get('discount_rate')
+        if not user_id or not discount_rate:
+            return jsonify({"error": "user_id y discount_rate son obligatorios."}), 400
+        try:
+            discount_rate = float(discount_rate)
+        except ValueError:
+            return jsonify({"error": "discount_rate debe ser numérico."}), 400
 
-        if not files or not user_id:
-            return jsonify({"error": "No se proporcionaron archivos o user_id"}), 400
+        # Otros datos del formulario (se usan en el PDF)
+        form_data = {
+            "purchase_info": request.form.get('purchase_info', ''),
+            "order_date": request.form.get('order_date', ''),
+            "seller_name": request.form.get('seller_name', ''),
+            "seller_PO": request.form.get('seller_PO', ''),
+            "seller_address": request.form.get('seller_address', ''),
+            "company_name": request.form.get('company_name', ''),
+            "company_address": request.form.get('company_address', ''),
+            "company_info": request.form.get('company_info', ''),
+            "shipping_method": request.form.get('shipping_method', ''),
+            "payment_terms": request.form.get('payment_terms', '')
+        }
 
-        allowed_extensions = {'csv', 'xlsx'}
-        uploaded_files = []
-        duplicate_files = []
+        files = request.files.getlist('files')
+        if not files:
+            return jsonify({"error": "No se han enviado archivos."}), 400
+
+        allowed_extensions = ['csv', 'xlsx']
+        temp_file_paths = []
         errors = []
+        duplicate_files = []
+        uploaded_files = []
+        renamed_files = []  # Para registrar archivos renombrados
 
+        # Procesar cada archivo recibido
         for file in files:
             if not file:
                 continue
-
-            filename = secure_filename(file.filename)
-            extension = filename.split('.')[-1].lower()
-
-            # Validar la extensión del archivo
-            if extension not in allowed_extensions:
-                errors.append({"file": filename, "error": "Formato de archivo no soportado"})
+            original_filename = file.filename.strip()
+            ext = original_filename.split('.')[-1].lower()
+            if ext not in allowed_extensions:
+                errors.append({"file": original_filename, "error": "Formato no soportado."})
                 continue
 
-            # Verificar si el archivo ya existe en la base de datos para este usuario
-            existing_file = UserFiles.query.filter_by(user_id=user_id, filename=filename).first()
+            # Generar nombre seguro con user_id, timestamp y nombre original
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            base_name = secure_filename(original_filename.rsplit('.', 1)[0])
+            new_filename = f"{user_id}_{timestamp}_{base_name}.{ext}"
+            
+            # Verificar si el nombre ya existe en la base de datos
+            existing_file = UserFiles.query.filter_by(filename=new_filename).first()
             if existing_file:
-                duplicate_files.append(filename)
+                # Si existe, agregar un sufijo único
+                unique_suffix = uuid.uuid4().hex[:4]
+                new_filename = f"{user_id}_{timestamp}_{base_name}_{unique_suffix}.{ext}"
+                renamed_files.append({
+                    'original': original_filename,
+                    'new': new_filename,
+                    'reason': 'El archivo ya existía en el sistema'
+                })
+
+            temp_path = os.path.join(UPLOAD_FOLDER, new_filename)
+            file.save(temp_path)
+            temp_file_paths.append(temp_path)
+
+            # Subir a Supabase y registrar en la BD
+            supa_path = f"uploads/{user_id}/{new_filename}"
+            if upload_to_supabase(temp_path, supa_path) is None:
+                errors.append({"file": original_filename, "error": "Error al subir a Supabase."})
+                os.remove(temp_path)
                 continue
 
-            # Guardar el archivo temporalmente
-            temp_path = os.path.join(UPLOAD_FOLDER, filename)
-            file.save(temp_path)
+            # Crear registro sin el campo original_name
+            new_file = UserFiles(
+                user_id=user_id,
+                filename=new_filename,  # Usamos el nuevo nombre generado
+                file_type=ext,
+                file_path=temp_path
+            )
+            db.session.add(new_file)
+            uploaded_files.append({
+                'original_name': original_filename,  # Guardamos el original solo en la respuesta
+                'stored_name': new_filename
+            })
+        
+        db.session.commit()
 
-            try:
-                # Subir el archivo a Supabase Storage
-                upload_result = upload_to_supabase(temp_path, f"uploads/{user_id}/{filename}")
+        if not temp_file_paths:
+            return jsonify({"error": "No se pudo procesar ningún archivo válido.", "details": errors}), 400
 
-                if upload_result is None:
-                    errors.append({"file": filename, "error": "Error al subir a Supabase"})
-                else:
-                    # Registrar el archivo en la base de datos
-                    new_file = UserFiles(user_id=user_id, filename=filename)
-                    db.session.add(new_file)
-                    db.session.commit()
-                    uploaded_files.append(filename)
+        # Consolidar todos los archivos en uno solo
+        consolidated_file, consolidate_error = consolidate_files(temp_file_paths, user_id)
+        if consolidate_error:
+            return jsonify({"error": consolidate_error}), 500
 
-            except Exception as e:
-                errors.append({"file": filename, "error": str(e)})
+        # Generar el CSV consolidado
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        csv_filename = f"{user_id}_{timestamp}_output.csv"
+        csv_path = os.path.join(DOWNLOAD_FOLDER, csv_filename)
+        csv_result = create_csv(consolidated_file, csv_path)
+        if "error" in csv_result:
+            return jsonify(csv_result), 500
 
-            finally:
-                # Eliminar el archivo temporal
-                if os.path.exists(temp_path):
-                    try:
-                        os.remove(temp_path)
-                    except PermissionError:
-                        errors.append({"file": filename, "error": "No se pudo eliminar el archivo temporal."})
+        # Generar el PDF consolidado
+        pdf_filename = f"{user_id}_{timestamp}_output.pdf"
+        pdf_path = os.path.join(DOWNLOAD_FOLDER, pdf_filename)
+        pdf_result = create_pdf(consolidated_file, pdf_path, discount_rate, form_data)
+        if "error" in pdf_result:
+            return jsonify(pdf_result), 500
+
+        # Subir CSV y PDF a Supabase
+        upload_to_supabase(csv_path, f"csv/{user_id}/{csv_filename}")
+        upload_to_supabase(pdf_path, f"pdf/{user_id}/{pdf_filename}")
+
+        # Limpiar archivos temporales (archivos individuales y el consolidado)
+        for path in temp_file_paths:
+            if os.path.exists(path):
+                os.remove(path)
+        if os.path.exists(consolidated_file):
+            os.remove(consolidated_file)
 
         return jsonify({
+            "message": "Procesamiento completado exitosamente.",
             "uploaded_files": uploaded_files,
-            "duplicate_files": duplicate_files,
+            "renamed_files": renamed_files,  # Informar sobre archivos renombrados
+            "csv": csv_filename,
+            "pdf": pdf_filename,
             "errors": errors
         }), 200
 
     except Exception as e:
-        print("Error al subir archivos:", str(e))
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-    
-@main.route('/download/<file_id>', methods=['GET'])
-def download_user_file(file_id):
-    """Permite a un usuario descargar su archivo mediante su ID."""
-    try:
-        user_id = request.args.get('user_id')  # Validar al usuario
-        if not user_id:
-            return jsonify({"error": "ID de usuario no proporcionado."}), 400
-
-        # Buscar el archivo en la base de datos
-        user_file = UserFiles.query.filter_by(id=file_id, user_id=user_id).first()
-        if not user_file:
-            return jsonify({"error": "Archivo no encontrado o no autorizado."}), 404
-
-        # Descargar desde Supabase Storage
-        file_path = f"user_files/{user_id}/{user_file.filename}"
-        download_result = download_file(file_path, DOWNLOAD_FOLDER)
-        if "error" in download_result:
-            return jsonify(download_result), 500
-
-        # Retornar el archivo al usuario
-        local_path = os.path.join(DOWNLOAD_FOLDER, user_file.filename)
-        return send_file(local_path, as_attachment=True)
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@main.route('/api/create-pdf', methods=['POST'])
-def generate_pdf():
-    try:
-        data = request.json
-        user_id = data.get("user_id")
-        if not user_id:
-            return jsonify({"error": "user_id no proporcionado."}), 400
-
-        # Obtener todos los archivos del usuario
-        user_files = UserFiles.query.filter_by(user_id=user_id).all()
-        if not user_files:
-            return jsonify({"error": "No se encontraron archivos para este usuario."}), 404
-
-        # Tomar el archivo más reciente
-        latest_file = user_files[-1].filename
-        
-        local_file_path = os.path.join(DOWNLOAD_FOLDER, latest_file)
-
-        # Si el archivo no está local, descargarlo de Supabase
-        if not os.path.exists(local_file_path):
-            download_result = download_file(f"uploads/{user_id}/{latest_file}")
-            if isinstance(download_result, dict) and "error" in download_result:
-                return jsonify({"error": download_result['error']}), 500
-            local_file_path = download_result
-
-        # Procesar el archivo antes de generar el PDF
-        processed_file = process_file(local_file_path, discount_percent=float(data.get("discount_rate", 3)))
-        if "error" in processed_file:
-            return jsonify(processed_file), 500
-
-        # Generar el nombre del PDF
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_pdf_name = f"{user_id}_{timestamp}_output.pdf"
-        output_pdf = os.path.join(DOWNLOAD_FOLDER, output_pdf_name)
-
-        # Crear el PDF con el archivo procesado
-        pdf_result = create_pdf(processed_file, output_pdf, discount_percent=float(data.get("discount_rate", 3)), form_data=data)
-        if "error" in pdf_result:
-            return jsonify(pdf_result), 500
-
-        # Subir el PDF a Supabase
-        try:
-            upload_pdf = upload_to_supabase(output_pdf, f"pdf/{user_id}/{output_pdf_name}")
-        except Exception as e:
-            if 'Duplicate' in str(e):
-                # Manejar el error de duplicado, renombrando el archivo
-                output_pdf_name = f"{user_id}_{timestamp}_{str(uuid.uuid4())}_output.pdf"
-                upload_pdf = upload_to_supabase(output_pdf, f"pdf/{user_id}/{output_pdf_name}")
-            else:
-                return jsonify({"error": f"Error al subir el PDF: {str(e)}"}), 500
-
-        return jsonify({
-            "message": f"PDF generado y subido exitosamente.",
-            "pdf": output_pdf_name
-        }), 200
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": f"Error en la generación del PDF: {str(e)}"}), 500
-
-# Llamada para limpiar archivos antiguos, si es necesario
-delete_old_files()
-
-@main.route('/api/create-csv', methods=['POST'])
-def generate_csv():
-    """
-    Genera un CSV procesado a partir del archivo subido por el usuario.
-    """
-    try:
-        data = request.json
-        user_id = data.get("user_id")
-        if not user_id:
-            return jsonify({"error": "user_id no proporcionado."}), 400
-
-        # Obtener el archivo del usuario (se toma el más reciente)
-        user_files = UserFiles.query.filter_by(user_id=user_id).all()
-        if not user_files:
-            return jsonify({"error": "No se encontraron archivos para este usuario."}), 404
-
-        latest_file = user_files[-1].filename
-        local_file_path = os.path.join(DOWNLOAD_FOLDER, latest_file)
-        
-        # Descargar el archivo si no existe localmente
-        if not os.path.exists(local_file_path):
-            download_result = download_file(f"uploads/{user_id}/{latest_file}")
-            if isinstance(download_result, dict) and "error" in download_result:
-                return jsonify(download_result), 500
-            local_file_path = download_result
-
-        # Definir la ruta del CSV procesado
-        output_csv = os.path.join(DOWNLOAD_FOLDER, f"{user_id}_output.csv")
-
-        # Crear el CSV usando la función ya definida (create_csv)
-        csv_result = create_csv(local_file_path, output_csv)
-        if "error" in csv_result:
-            return jsonify(csv_result), 500
-
-        # Opcional: Subir el CSV a Supabase (por ejemplo, a un bucket 'csv')
-        upload_csv = upload_to_supabase(output_csv, f"csv/{user_id}/{os.path.basename(output_csv)}")
-        if upload_csv is None or ("error" in upload_csv):
-            return jsonify({"error": "CSV creado, pero error al subir a Supabase."}), 500
-
-        return jsonify({
-            "message": f"CSV generado y subido exitosamente.",
-            "csv": os.path.basename(output_csv)
-        }), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@main.route('/check_connection')
-def check_connection():
-    """ Verifica la conexión con Supabase """
-    try:
-        data = db.session.query(Inventory).all()
-        return jsonify({"message": "Conexión exitosa", "data": [item.__dict__ for item in data]})
-    except Exception as e:
         return jsonify({"error": str(e)}), 500

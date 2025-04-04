@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Prueba de Carga y Descarga de Archivos</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    form { margin-bottom: 20px; }
+    input, button { padding: 5px; margin: 5px 0; }
+    label { display: block; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Prueba de Carga de Archivos</h1>
+  <form id="uploadForm" action="http://127.0.0.1:5000/api/process-all" method="POST" enctype="multipart/form-data">
+    <label for="user_id">User ID:</label>
+    <input type="text" id="user_id" name="user_id" required>
+
+    <label for="discount_rate">Discount Rate:</label>
+    <input type="number" id="discount_rate" name="discount_rate" required step="any">
+
+    <label for="purchase_info">Purchase Info:</label>
+    <input type="text" id="purchase_info" name="purchase_info">
+
+    <label for="order_date">Order Date:</label>
+    <input type="text" id="order_date" name="order_date">
+
+    <label for="seller_name">Seller Name:</label>
+    <input type="text" id="seller_name" name="seller_name">
+
+    <label for="seller_PO">Seller PO:</label>
+    <input type="text" id="seller_PO" name="seller_PO">
+
+    <label for="seller_address">Seller Address:</label>
+    <input type="text" id="seller_address" name="seller_address">
+
+    <label for="company_name">Company Name:</label>
+    <input type="text" id="company_name" name="company_name">
+
+    <label for="company_address">Company Address:</label>
+    <input type="text" id="company_address" name="company_address">
+
+    <label for="company_info">Company Info:</label>
+    <input type="text" id="company_info" name="company_info">
+
+    <label for="shipping_method">Shipping Method:</label>
+    <input type="text" id="shipping_method" name="shipping_method">
+
+    <label for="payment_terms">Payment Terms:</label>
+    <input type="text" id="payment_terms" name="payment_terms">
+
+    <label for="files">Selecciona uno o varios archivos (CSV o XLSX):</label>
+    <input type="file" id="files" name="files" multiple required>
+
+    <br>
+    <button type="submit">Enviar y Procesar</button>
+  </form>
+
+  <hr>
+
+  <h2>Descargar Archivos Generados</h2>
+  <p>Usa los siguientes formularios o enlaces para descargar el PDF o CSV generado.</p>
+  
+  <form id="downloadPdfForm" action="http://127.0.0.1:5000/download/pdf" method="GET">
+    <label for="pdf_filename">Nombre del PDF:</label>
+    <input type="text" id="pdf_filename" name="filename" placeholder="Ej: 1234_20250403_131200_output.pdf" required>
+    <button type="submit">Descargar PDF</button>
+  </form>
+  
+  <form id="downloadCsvForm" action="http://127.0.0.1:5000/download/csv" method="GET">
+    <label for="csv_filename">Nombre del CSV:</label>
+    <input type="text" id="csv_filename" name="filename" placeholder="Ej: 1234_20250403_131200_output.csv" required>
+    <button type="submit">Descargar CSV</button>
+  </form>
+  
+</body>
+</html>

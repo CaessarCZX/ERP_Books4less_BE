@@ -1,3 +1,4 @@
+from sqlalchemy import Column, Integer, String, DateTime
 from datetime import datetime
 from app import db
 
@@ -23,11 +24,13 @@ class Inventory(db.Model):
 
 class UserFiles(db.Model):
     __tablename__ = 'user_files'
-
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.String(50), nullable=False)
-    filename = db.Column(db.String(255), nullable=False)
-    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
-
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(100), nullable=False)
+    filename = Column(String(255), nullable=False)
+    uploaded_at = Column(DateTime(timezone=True), server_default=db.func.now())
+    file_type = Column(String(20))
+    file_path = Column(String(255))
+    
     def __repr__(self):
-        return f"<UserFile {self.filename}>"
+        return f'<UserFile {self.filename}>'
