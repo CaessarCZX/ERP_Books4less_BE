@@ -143,44 +143,84 @@
                 const searchText = $('#searchBox').val().toLowerCase();
                 const category = $('#categoryFilter').val();
                 const perPage = parseInt($('#entries').val());
-    
+
                 const filteredData = data.filter(d => {
                     const matchText = d.descripcion.toLowerCase().includes(searchText);
-                    const matchCat = category === 'all' || d.tipo === category;
+                    const matchCat = (category === 'all' || d.tipo === category);
                     return matchText && matchCat;
                 });
-    
+
                 const totalPages = Math.ceil(filteredData.length / perPage);
                 if (currentPage > totalPages) currentPage = totalPages || 1;
-    
+
                 const start = (currentPage - 1) * perPage;
                 const end = start + perPage;
-    
-                const currentItems = filteredData.slice(start, end);
-    
+
+                // 1) Tomar los elementos de la página actual
+                let currentItems = filteredData.slice(start, end);
+
+                // 2) Crear una función para extraer el "basename" (nombre sin extensión)
+                function getBasename(filename) {
+                    // Opción A: usando split:
+                    // return filename.split('.').slice(0, -1).join('.');
+                    // Opción B: usando regex:
+                    return filename.replace(/\.[^/.]+$/, ""); 
+                }
+
+                // 3) Ordenar por basename
+                currentItems.sort((a, b) => {
+                    const baseA = getBasename(a.descripcion).toLowerCase();
+                    const baseB = getBasename(b.descripcion).toLowerCase();
+                    return baseA.localeCompare(baseB);
+                });
+
+                // 4) Generar la tabla, insertando separadores por cambio de basename
                 const tbody = $('#fileTable tbody');
                 tbody.empty();
-                currentItems.forEach(d => {
-                    tbody.append(`<tr class="${d.tipo}">
-                        <td>${d.tipo.toUpperCase()}</td>
-                        <td>${d.descripcion}</td>
-                        <td>${d.fecha}</td>
-                        <td>${d.tamano}</td>
-                        <td><a href="${d.url}" target="_blank">Descargar</a></td>
-                    </tr>`);
+
+                let lastBasename = "";
+                currentItems.forEach((d, index) => {
+                    // Calcular el basename del archivo actual
+                    const currentBasename = getBasename(d.descripcion);
+
+                    // Si NO es el primer archivo y el basename cambió, insertamos separador
+                    if (index > 0 && currentBasename !== lastBasename) {
+                        tbody.append(`
+                            <tr class="separator">
+                                <td colspan="5" style="background-color: #fff; height: 8px;"></td>
+                            </tr>
+                        `);
+                    }
+
+                    // Insertar la fila real del archivo
+                    tbody.append(`
+                        <tr class="${d.tipo}">
+                            <td>${d.tipo.toUpperCase()}</td>
+                            <td>${d.descripcion}</td>
+                            <td>${d.fecha}</td>
+                            <td>${d.tamano}</td>
+                            <td><a href="${d.url}" target="_blank">Descargar</a></td>
+                        </tr>
+                    `);
+
+                    // Actualizar el "lastBasename"
+                    lastBasename = currentBasename;
                 });
-    
+
+                // 5) Paginación
                 const pagContainer = $('#pagination');
                 pagContainer.empty();
                 for (let i = 1; i <= totalPages; i++) {
-                    pagContainer.append(`<button class="page-btn${i === currentPage ? ' active' : ''}" data-page="${i}">${i}</button>`);
+                    pagContainer.append(`
+                        <button class="page-btn${i === currentPage ? ' active' : ''}" data-page="${i}">${i}</button>
+                    `);
                 }
-    
+
                 $('.page-btn').click(function () {
                     currentPage = parseInt($(this).attr('data-page'));
                     renderTable();
                 });
-    
+
                 $('#pagination-info').text(`Mostrando ${start + 1} a ${Math.min(end, filteredData.length)} de ${filteredData.length} entradas`);
             }
     
