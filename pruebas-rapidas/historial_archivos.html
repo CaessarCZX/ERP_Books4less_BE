@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tabla con Paginación</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .table-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        select, input {
+            padding: 5px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        .pdf {
+            background-color: #ff8074;
+        }
+        .csv {
+            background-color: #67d1f1;
+        }
+        .excel {
+            background-color: #69ffb7;
+        }
+        .pagination-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 10px;
+        }
+        .pagination {
+            display: flex;
+            justify-content: flex-end;
+        }
+        .pagination button {
+            margin: 0 2px;
+            padding: 5px 10px;
+            border: 1px solid #ccc;
+            background-color: white;
+            cursor: pointer;
+        }
+        .pagination button.active {
+            background-color: #007bff;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="table-container">
+        <div class="controls">
+            <div>
+                <select id="categoryFilter">
+                    <option value="all">All categories</option>
+                    <option value="pdf">PDF</option>
+                    <option value="csv">CSV</option>
+                    <option value="excel">Excel</option>
+                </select>
+                <input type="text" id="searchBox" placeholder="Buscar...">
+            </div>
+            <div>
+                Mostrar
+                <select id="entries">
+                    <option value="5">5</option>
+                    <option value="10" selected>10</option>
+                    <option value="15">15</option>
+                </select>
+                entradas
+            </div>
+        </div>
+        <table id="fileTable">
+            <thead>
+                <tr>
+                    <th>Tipo</th>
+                    <th>Descripción</th>
+                    <th>Fecha</th>
+                    <th>Tamaño</th>
+                    <th>Acción</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Aquí irán los archivos -->
+            </tbody>
+        </table>
+        <div class="pagination-container">
+            <div id="pagination-info"></div>
+            <div class="pagination" id="pagination"></div>
+        </div>
+    </div>
+
+    <script>
+        $(document).ready(function () {
+            let data = [];
+            let currentPage = 1;
+    
+            function fetchFiles() {
+                $.get('http://127.0.0.1:5000/api/files', function (response) {
+                    data = response.map(file => {
+                        return {
+                            tipo: file.tipo,
+                            descripcion: file.nombre,
+                            fecha: formatDate(file.fecha_subida),
+                            tamano: file.tamano ? file.tamano + ' MB' : 'Desconocido',
+                            url: file.url_descarga
+                        };
+                    });
+                    renderTable();
+                }).fail(function () {
+                    alert('Error al obtener archivos desde el servidor.');
+                });
+            }
+    
+            function formatDate(isoString) {
+                if (!isoString) return '';
+                const d = new Date(isoString);
+                return d.toLocaleDateString('es-ES');
+            }
+    
+            function renderTable() {
+                const searchText = $('#searchBox').val().toLowerCase();
+                const category = $('#categoryFilter').val();
+                const perPage = parseInt($('#entries').val());
+    
+                const filteredData = data.filter(d => {
+                    const matchText = d.descripcion.toLowerCase().includes(searchText);
+                    const matchCat = category === 'all' || d.tipo === category;
+                    return matchText && matchCat;
+                });
+    
+                const totalPages = Math.ceil(filteredData.length / perPage);
+                if (currentPage > totalPages) currentPage = totalPages || 1;
+    
+                const start = (currentPage - 1) * perPage;
+                const end = start + perPage;
+    
+                const currentItems = filteredData.slice(start, end);
+    
+                const tbody = $('#fileTable tbody');
+                tbody.empty();
+                currentItems.forEach(d => {
+                    tbody.append(`<tr class="${d.tipo}">
+                        <td>${d.tipo.toUpperCase()}</td>
+                        <td>${d.descripcion}</td>
+                        <td>${d.fecha}</td>
+                        <td>${d.tamano}</td>
+                        <td><a href="${d.url}" target="_blank">Descargar</a></td>
+                    </tr>`);
+                });
+    
+                const pagContainer = $('#pagination');
+                pagContainer.empty();
+                for (let i = 1; i <= totalPages; i++) {
+                    pagContainer.append(`<button class="page-btn${i === currentPage ? ' active' : ''}" data-page="${i}">${i}</button>`);
+                }
+    
+                $('.page-btn').click(function () {
+                    currentPage = parseInt($(this).attr('data-page'));
+                    renderTable();
+                });
+    
+                $('#pagination-info').text(`Mostrando ${start + 1} a ${Math.min(end, filteredData.length)} de ${filteredData.length} entradas`);
+            }
+    
+            $('#searchBox, #categoryFilter, #entries').on('input change', function () {
+                currentPage = 1;
+                renderTable();
+            });
+    
+            fetchFiles();
+        });
+    </script>
+    
+</body>
+</html>
