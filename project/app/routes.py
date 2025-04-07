@@ -1,13 +1,15 @@
 from flask import Blueprint, jsonify, request, send_file
 from app.services import upload_to_supabase, download_file_from_supabase, process_file, create_pdf, create_csv, delete_old_files
 from app import db
-from app.models import UserFiles
 import os
 import uuid
 import traceback
 import pandas as pd
 from datetime import datetime
 from werkzeug.utils import secure_filename
+from app.supabase_client import supabase
+
+
 
 main = Blueprint('main', __name__)
 
@@ -19,42 +21,6 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Limpieza de archivos antiguos
 delete_old_files()
-@main.route('/api/user-files', methods=['GET'])
-def get_user_files():
-    user_id = request.args.get('user_id')
-    if not user_id:
-        return jsonify({'error': 'user_id is required'}), 400
-    
-    # Filtros adicionales
-    file_type = request.args.get('file_type')
-    from_date = request.args.get('from_date')
-    to_date = request.args.get('to_date')
-    
-    try:
-        query = UserFiles.query.filter_by(user_id=user_id)
-        
-        if file_type:
-            query = query.filter(UserFiles.file_type.ilike(f"%{file_type}%"))
-        
-        if from_date:
-            query = query.filter(UserFiles.uploaded_at >= from_date)
-            
-        if to_date:
-            query = query.filter(UserFiles.uploaded_at <= to_date)
-        
-        files = query.order_by(UserFiles.uploaded_at.desc()).all()
-        
-        files_data = [{
-            'id': file.id,
-            'filename': file.filename,
-            'uploaded_at': file.uploaded_at.isoformat() if file.uploaded_at else None,
-            'file_type': file.file_type
-        } for file in files]
-        
-        return jsonify({'files': files_data})
-    except Exception as e:
-        current_app.logger.error(f"Error getting user files: {str(e)}")
-        return jsonify({'error': 'Internal server error'}), 500
 
 @main.route('/download/pdf', methods=['GET'])
 def download_pdf():
@@ -105,7 +71,7 @@ def download_csv():
         return jsonify({"error": str(e)}), 500
     
     
-def consolidate_files(file_paths, user_id):
+def consolidate_files(file_paths):
     """
     Lee todos los archivos en file_paths (soportados: CSV y XLSX),
     los concatena en un único DataFrame y lo guarda en un archivo Excel temporal.
@@ -136,7 +102,8 @@ def consolidate_files(file_paths, user_id):
     if not dfs:
         return None, "No se pudo leer ningún archivo válido."
     consolidated_df = pd.concat(dfs, ignore_index=True)
-    consolidated_file = os.path.join(DOWNLOAD_FOLDER, f"{user_id}_consolidated.xlsx")
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    consolidated_file = os.path.join(DOWNLOAD_FOLDER, f"{timestamp}_consolidated.xlsx")
     consolidated_df.to_excel(consolidated_file, index=False)
     return consolidated_file, None
 
@@ -153,10 +120,9 @@ def process_all():
     """
     try:
         # Validar campos obligatorios
-        user_id = request.form.get('user_id')
         discount_rate = request.form.get('discount_rate')
-        if not user_id or not discount_rate:
-            return jsonify({"error": "user_id y discount_rate son obligatorios."}), 400
+        if not discount_rate:
+            return jsonify({"error": "discount_rate es obligatorio."}), 400
         try:
             discount_rate = float(discount_rate)
         except ValueError:
@@ -183,7 +149,7 @@ def process_all():
         allowed_extensions = ['csv', 'xlsx']
         temp_file_paths = []
         errors = []
-        duplicate_files = []
+        # duplicate_files = []
         uploaded_files = []
         renamed_files = []  # Para registrar archivos renombrados
 
@@ -198,74 +164,62 @@ def process_all():
                 continue
 
             # Generar nombre seguro con user_id, timestamp y nombre original
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            # timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             base_name = secure_filename(original_filename.rsplit('.', 1)[0])
-            new_filename = f"{user_id}_{timestamp}_{base_name}.{ext}"
+            # new_filename = f"{timestamp}_{base_name}.{ext}"
+            new_filename = f"{base_name}.{ext}"
+
+
             
             # Verificar si el nombre ya existe en la base de datos
-            existing_file = UserFiles.query.filter_by(filename=new_filename).first()
-            if existing_file:
-                # Si existe, agregar un sufijo único
-                unique_suffix = uuid.uuid4().hex[:4]
-                new_filename = f"{user_id}_{timestamp}_{base_name}_{unique_suffix}.{ext}"
-                renamed_files.append({
-                    'original': original_filename,
-                    'new': new_filename,
-                    'reason': 'El archivo ya existía en el sistema'
-                })
+           
 
             temp_path = os.path.join(UPLOAD_FOLDER, new_filename)
             file.save(temp_path)
             temp_file_paths.append(temp_path)
 
             # Subir a Supabase y registrar en la BD
-            supa_path = f"uploads/{user_id}/{new_filename}"
+            supa_path = f"uploads/{new_filename}"
             if upload_to_supabase(temp_path, supa_path) is None:
                 errors.append({"file": original_filename, "error": "Error al subir a Supabase."})
                 os.remove(temp_path)
                 continue
 
-            # Crear registro sin el campo original_name
-            new_file = UserFiles(
-                user_id=user_id,
-                filename=new_filename,  # Usamos el nuevo nombre generado
-                file_type=ext,
-                file_path=temp_path
-            )
-            db.session.add(new_file)
+           
             uploaded_files.append({
                 'original_name': original_filename,  # Guardamos el original solo en la respuesta
                 'stored_name': new_filename
             })
         
-        db.session.commit()
+      
 
         if not temp_file_paths:
             return jsonify({"error": "No se pudo procesar ningún archivo válido.", "details": errors}), 400
 
         # Consolidar todos los archivos en uno solo
-        consolidated_file, consolidate_error = consolidate_files(temp_file_paths, user_id)
+        consolidated_file, consolidate_error = consolidate_files(temp_file_paths)
         if consolidate_error:
             return jsonify({"error": consolidate_error}), 500
 
         # Generar el CSV consolidado
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        csv_filename = f"{user_id}_{timestamp}_output.csv"
+        # timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        excel_base = secure_filename(files[0].filename.rsplit('.', 1)[0])
+        csv_filename = f"{excel_base}.csv"
         csv_path = os.path.join(DOWNLOAD_FOLDER, csv_filename)
         csv_result = create_csv(consolidated_file, csv_path)
         if "error" in csv_result:
             return jsonify(csv_result), 500
 
         # Generar el PDF consolidado
-        pdf_filename = f"{user_id}_{timestamp}_output.pdf"
+        pdf_filename = f"{excel_base}.pdf"
         pdf_path = os.path.join(DOWNLOAD_FOLDER, pdf_filename)
         pdf_result = create_pdf(consolidated_file, pdf_path, discount_rate, form_data)
         if "error" in pdf_result:
             return jsonify(pdf_result), 500
 
         # Subir CSV y PDF a Supabase
-        upload_to_supabase(csv_path, f"csv/{user_id}/{csv_filename}")
-        upload_to_supabase(pdf_path, f"pdf/{user_id}/{pdf_filename}")
+        upload_to_supabase(csv_path, f"csv/{csv_filename}")
+        upload_to_supabase(pdf_path, f"pdf/{pdf_filename}")
 
         # Limpiar archivos temporales (archivos individuales y el consolidado)
         for path in temp_file_paths:
@@ -282,6 +236,49 @@ def process_all():
             "pdf": pdf_filename,
             "errors": errors
         }), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    
+@main.route('/api/files', methods=['GET'])
+def list_files():
+    """
+    Lista todos los archivos dentro del bucket 'uploads' en Supabase,
+    incluyendo archivos en la raíz, 'pdf/' y 'csv/', ignorando carpetas y archivos ocultos.
+    """
+    try:
+        carpetas = ['uploads/', 'pdf/', 'csv/']
+        archivos = []
+
+        for carpeta in carpetas:
+            files = supabase.storage.from_('uploads').list(carpeta)
+
+            for file in files:
+                nombre_archivo = file["name"]
+
+                # Ignorar archivos ocultos (ej: .emptyFolderPlaceholder) o sin metadata
+                if nombre_archivo.startswith('.') or not file.get("metadata"):
+                    continue
+
+                ext = nombre_archivo.split('.')[-1].lower()
+                tipo = (
+                    'pdf' if ext == 'pdf' else
+                    'csv' if ext == 'csv' else
+                    'excel' if ext == 'xlsx' else
+                    'otro'
+                )
+
+                archivos.append({
+                    "nombre": nombre_archivo,
+                    "carpeta": carpeta if carpeta else "root",
+                    "tipo": tipo,
+                    "fecha_subida": file.get("created_at", "No disponible"),
+                    "tamano": round(file["metadata"].get("size", 0) / 1024 / 1024, 2),
+                    "url_descarga": supabase.storage.from_('uploads').get_public_url(f'{carpeta}{nombre_archivo}')
+                })
+
+        return jsonify(archivos), 200
 
     except Exception as e:
         traceback.print_exc()
