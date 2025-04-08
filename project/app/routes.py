@@ -275,7 +275,7 @@ def list_files():
                     "tipo": tipo,
                     "fecha_subida": file.get("created_at", "No disponible"),
                     "tamano": round(file["metadata"].get("size", 0) / 1024 / 1024, 2),
-                    "url_descarga": f"/download?carpeta={carpeta}&filename={nombre_archivo}"
+                    "url_descarga": f"http://127.0.0.1:5000/download?carpeta={carpeta}&filename={nombre_archivo}"
                 })
 
         return jsonify(archivos), 200
