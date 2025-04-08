@@ -179,7 +179,7 @@ def process_all():
             temp_file_paths.append(temp_path)
 
             # Subir a Supabase y registrar en la BD
-            supa_path = f"uploads/{new_filename}"
+            supa_path = f"xlsx/{new_filename}"
             if upload_to_supabase(temp_path, supa_path) is None:
                 errors.append({"file": original_filename, "error": "Error al subir a Supabase."})
                 os.remove(temp_path)
@@ -248,7 +248,7 @@ def list_files():
     incluyendo archivos en la raíz, 'pdf/' y 'csv/', ignorando carpetas y archivos ocultos.
     """
     try:
-        carpetas = ['uploads/', 'pdf/', 'csv/']
+        carpetas = ['xlsx/', 'pdf/', 'csv/']
         archivos = []
 
         for carpeta in carpetas:

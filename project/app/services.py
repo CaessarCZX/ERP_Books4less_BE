@@ -41,25 +41,28 @@ def upload_to_supabase(file_path, destination_path):
         print(f"Excepción durante la subida: {e}")
         return None
 
-def download_file_from_supabase(supabase_path, local_path):
-    """Descarga un archivo de Supabase Storage"""
+def download_file_from_supabase(supabase_path, local_path=None):
     try:
-        # Obtener URL firmada
-        res = supabase.storage.from_('files').create_signed_url(supabase_path, 3600)  # 1 hora de validez
+        # Cambiar el bucket a 'uploads'
+        res = supabase.storage.from_('uploads').create_signed_url(supabase_path, 3600)  # 1 hora de validez
         if not res:
-            return None
+            return {"error": "No se pudo obtener la URL firmada"}
         
-        # Descargar el archivo
-        import requests
+        # Si no se especifica la ruta local, se crea a partir del nombre de archivo
+        if local_path is None:
+            # Extraer el nombre del archivo desde la ruta Supabase (por ejemplo, "pdf/archivo.pdf")
+            filename = supabase_path.split('/')[-1]
+            local_path = os.path.join(DOWNLOAD_FOLDER, filename)
+        
         response = requests.get(res['signed_url'])
         if response.status_code == 200:
             with open(local_path, 'wb') as f:
                 f.write(response.content)
-            return True
-        return False
+            return local_path
+        return {"error": "No se pudo descargar el archivo"}
     except Exception as e:
         print(f"Error al descargar de Supabase: {e}")
-        return None
+        return {"error": str(e)}
     
 def clean_numeric_column(series):
     """

@@ -13,9 +13,6 @@
 <body>
   <h1>Prueba de Carga de Archivos</h1>
   <form id="uploadForm" action="http://127.0.0.1:5000/api/process-all" method="POST" enctype="multipart/form-data">
-    <label for="user_id">User ID:</label>
-    <input type="text" id="user_id" name="user_id" required>
-
     <label for="discount_rate">Discount Rate:</label>
     <input type="number" id="discount_rate" name="discount_rate" required step="any">
 
@@ -56,22 +53,9 @@
     <button type="submit">Enviar y Procesar</button>
   </form>
 
-  <hr>
+ 
 
-  <h2>Descargar Archivos Generados</h2>
-  <p>Usa los siguientes formularios o enlaces para descargar el PDF o CSV generado.</p>
-  
-  <form id="downloadPdfForm" action="http://127.0.0.1:5000/download/pdf" method="GET">
-    <label for="pdf_filename">Nombre del PDF:</label>
-    <input type="text" id="pdf_filename" name="filename" placeholder="Ej: 1234_20250403_131200_output.pdf" required>
-    <button type="submit">Descargar PDF</button>
-  </form>
-  
-  <form id="downloadCsvForm" action="http://127.0.0.1:5000/download/csv" method="GET">
-    <label for="csv_filename">Nombre del CSV:</label>
-    <input type="text" id="csv_filename" name="filename" placeholder="Ej: 1234_20250403_131200_output.csv" required>
-    <button type="submit">Descargar CSV</button>
-  </form>
+
   
 </body>
 </html>
