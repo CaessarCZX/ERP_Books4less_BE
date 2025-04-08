@@ -8,7 +8,7 @@ import pandas as pd
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from app.supabase_client import supabase
-
+import io
 
 
 main = Blueprint('main', __name__)
@@ -275,7 +275,7 @@ def list_files():
                     "tipo": tipo,
                     "fecha_subida": file.get("created_at", "No disponible"),
                     "tamano": round(file["metadata"].get("size", 0) / 1024 / 1024, 2),
-                    "url_descarga": supabase.storage.from_('uploads').get_public_url(f'{carpeta}{nombre_archivo}')
+                    "url_descarga": f"/download?carpeta={carpeta}&filename={nombre_archivo}"
                 })
 
         return jsonify(archivos), 200
@@ -283,3 +283,28 @@ def list_files():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+    
+@main.route('/download')
+def descargar_archivo():
+    carpeta = request.args.get('carpeta', '')
+    filename = request.args.get('filename', '')
+
+    if not filename:
+        return "Archivo no especificado", 400
+
+    ruta = f"{carpeta}{filename}"
+
+    try:
+        # Descarga el archivo desde Supabase
+        res = supabase.storage.from_('uploads').download(ruta)
+
+        # Forzar descarga desde el navegador
+        return send_file(
+            io.BytesIO(res),
+            as_attachment=True,
+            download_name=filename
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return f"Error al descargar: {str(e)}", 500

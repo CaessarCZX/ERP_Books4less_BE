@@ -67,6 +67,15 @@
             background-color: #007bff;
             color: white;
         }
+
+        .descargar-btn {
+        background: none;
+        border: none;
+        font-size: medium;
+        cursor: pointer;
+        }
+
+        
     </style>
 </head>
 <body>
@@ -199,7 +208,7 @@
                             <td>${d.descripcion}</td>
                             <td>${d.fecha}</td>
                             <td>${d.tamano}</td>
-                            <td><a href="${d.url}" target="_blank">Descargar</a></td>
+                            <td><button class='descargar-btn'  onclick="forzarDescarga('${d.url}', '${d.descripcion}')">Descargar</button></td>
                         </tr>
                     `);
 
@@ -231,6 +240,16 @@
     
             fetchFiles();
         });
+
+
+        function forzarDescarga(url, filename) {
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename; // Esto sugiere al navegador que lo descargue
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+        }
     </script>
     
 </body>
