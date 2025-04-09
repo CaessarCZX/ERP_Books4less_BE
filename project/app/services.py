@@ -32,13 +32,19 @@ def delete_old_files():
 def upload_to_supabase(file_path, destination_path):
     """Sube un archivo al almacenamiento de Supabase."""
     try:
+        # Crear estructura de carpetas si no existe
+        folder = "/".join(destination_path.split("/")[:-1])
+        try:
+            supabase.storage.from_('uploads').list(folder)
+        except:
+            # Si falla, asumimos que la carpeta no existe
+            supabase.storage.from_('uploads').create_folder(folder)
+            
         with open(file_path, 'rb') as f:
             response = supabase.storage.from_('uploads').upload(destination_path, f)
-        if hasattr(response, 'error') and response.error:
-            raise Exception(response.error['message'])
         return response
     except Exception as e:
-        print(f"Excepción durante la subida: {e}")
+        print(f"Error al subir archivo: {e}")
         return None
 
 def download_file_from_supabase(supabase_path, local_path):
@@ -50,7 +56,6 @@ def download_file_from_supabase(supabase_path, local_path):
             return None
         
         # Descargar el archivo
-        import requests
         response = requests.get(res['signed_url'])
         if response.status_code == 200:
             with open(local_path, 'wb') as f:
