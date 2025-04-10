@@ -12,5 +12,6 @@ def create_app():
     # Importar y registrar rutas
     from app.routes import main
     app.register_blueprint(main)
+    
 
     return app

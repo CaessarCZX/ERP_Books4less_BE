@@ -5,10 +5,12 @@ import os
 import uuid
 import traceback
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from werkzeug.utils import secure_filename
 from app.supabase_client import supabase
 import io
+import bcrypt
+import jwt
 
 
 main = Blueprint('main', __name__)
@@ -21,6 +23,12 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Limpieza de archivos antiguos
 delete_old_files()
+
+
+# para el login
+# Debes tener definida en tu configuración una clave secreta
+SECRET_KEY = "marioputo"  # Cambia esto por tu clave segura
+ALGORITHM = "HS256"
 
 @main.route('/download/pdf', methods=['GET'])
 def download_pdf():
@@ -308,3 +316,142 @@ def descargar_archivo():
     except Exception as e:
         traceback.print_exc()
         return f"Error al descargar: {str(e)}", 500
+    
+
+
+@main.route('/api/login', methods=['POST'])
+def login_user():
+    try:
+        data = request.json
+        email = data.get('email')
+        password = data.get('password')
+        
+        # Validar que ambos campos estén presentes
+        if not email or not password:
+            return jsonify({"error": "El email y la contraseña son obligatorios."}), 400
+
+        # Buscar el usuario en la base de datos (se seleccionan id, email y password)
+        user_query = supabase.table('users').select('id, email, password').eq('email', email).execute()
+        if not user_query.data or len(user_query.data) == 0:
+            return jsonify({"error": "Usuario no encontrado."}), 404
+
+        # Obtener el primer registro (se asume que el email es único)
+        user = user_query.data[0]
+        user_id = user.get('id')
+        stored_hashed = user.get('password')
+
+        # Comparar la contraseña enviada con la almacenada (hasheada)
+        if not bcrypt.checkpw(password.encode('utf-8'), stored_hashed.encode('utf-8')):
+            return jsonify({"error": "Contraseña incorrecta."}), 401
+
+        # Generar token de login válido por 5 minutos
+        login_payload = {
+            "user_id": user_id,
+            "email": email,
+            "exp": datetime.utcnow() + timedelta(minutes=5)
+        }
+        login_token = jwt.encode(login_payload, SECRET_KEY, algorithm=ALGORITHM)
+
+        # Generar token de sesión válido por 1 día
+        session_payload = {
+            "user_id": user_id,
+            "email": email,
+            "exp": datetime.utcnow() + timedelta(days=1)
+        }
+        session_token = jwt.encode(session_payload, SECRET_KEY, algorithm=ALGORITHM)
+
+        return jsonify({
+            "login_token": login_token,
+            "session_token": session_token,
+            "user_id": user_id,
+            "email": email
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+
+@main.route('/api/register', methods=['POST'])
+def register_user():
+    try:
+        data = request.json
+        email = data.get('email')
+        password = data.get('password')
+        confirm_password = data.get('confirm_password')
+
+        if not email or not password or not confirm_password:
+            return jsonify({'error': 'Todos los campos son obligatorios.'}), 400
+
+        if password != confirm_password:
+            return jsonify({'error': 'Las contraseñas no coinciden.'}), 400
+
+        # Verificar si el correo ya está registrado
+        existing_user = supabase.table('users').select('email').eq('email', email).execute()
+        if existing_user.data:
+            return jsonify({'error': 'El correo ya está registrado.'}), 400
+
+        # Hashear la contraseña
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+        # Insertar en Supabase
+        result = supabase.table('users').insert({
+            'email': email,
+            'password': hashed_password,
+            'is_admin': False
+        }).execute()
+
+        # Convertir el APIResponse a diccionario
+        result_dict = result.dict()
+        
+        # Verificar si se encontró un error en el resultado
+        if result_dict.get('error'):
+            return jsonify({'error': result_dict.get('error')}), 500
+
+        # Obtener el ID del usuario recién creado
+        user_id = result_dict['data'][0]['id']
+
+        return jsonify({'message': 'Usuario registrado exitosamente.', 'user_id': user_id}), 201
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+    
+@main.route('/api/change-password', methods=['POST'])
+def change_password():
+    try:
+        data = request.json
+        email = data.get('email')
+        new_password = data.get('new_password')
+        confirm_new_password = data.get('confirm_new_password')
+
+        # Verificar que se envíen todos los campos
+        if not email or not new_password or not confirm_new_password:
+            return jsonify({'error': 'Todos los campos son obligatorios.'}), 400
+
+        # Validar que las contraseñas coincidan
+        if new_password != confirm_new_password:
+            return jsonify({'error': 'Las contraseñas no coinciden.'}), 400
+
+        # Verificar si el usuario existe en la base de datos
+        user_query = supabase.table('users').select('id').eq('email', email).execute()
+        if not user_query.data or len(user_query.data) == 0:
+            return jsonify({'error': 'Usuario no encontrado.'}), 404
+
+        # Hashear la nueva contraseña
+        hashed_new_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+        # Actualizar la contraseña del usuario en Supabase
+        update_result = supabase.table('users').update({
+            'password': hashed_new_password
+        }).eq('email', email).execute()
+
+        # Convertir la respuesta a diccionario para poder acceder a "error"
+        result_dict = update_result.dict()
+        if result_dict.get('error'):
+            return jsonify({'error': result_dict.get('error')}), 500
+
+        return jsonify({'message': 'Contraseña actualizada exitosamente.'}), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
