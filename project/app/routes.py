@@ -11,6 +11,7 @@ from app.supabase_client import supabase
 import io
 import bcrypt
 import jwt
+from functools import wraps
 
 
 main = Blueprint('main', __name__)
@@ -27,8 +28,43 @@ delete_old_files()
 
 # para el login
 # Debes tener definida en tu configuración una clave secreta
-SECRET_KEY = "marioputo"  # Cambia esto por tu clave segura
+SECRET_KEY = "clavesupersecretanomanches"  # Cambia esto por tu clave segura
 ALGORITHM = "HS256"
+
+# decorador para autenticacion de usuario 
+def token_required(role=None):
+    def decorator(f):
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            auth_header = request.headers.get('Authorization')
+
+            if not auth_header or not auth_header.startswith('Bearer '):
+                return jsonify({"error": "Token no proporcionado o malformado."}), 401
+
+            token = auth_header.split(' ')[1]
+
+            try:
+                payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            except jwt.ExpiredSignatureError:
+                return jsonify({"error": "Token expirado."}), 401
+            except jwt.InvalidTokenError:
+                return jsonify({"error": "Token inválido."}), 401
+
+            # Verificación de rol (si se requiere uno específico)
+            if role:
+                if payload.get("role") != role:
+                    return jsonify({"error": "Acceso denegado. Permiso insuficiente."}), 403
+
+            # Adjunta el payload a la request si quieres usarlo en las rutas
+            request.user = payload
+
+            return f(*args, **kwargs)
+        return wrapped
+    return decorator
+
+# @token_required()  # cualquier usuario autenticado
+# @token_required(role='admin')  # solo admins
+
 
 @main.route('/download/pdf', methods=['GET'])
 def download_pdf():
@@ -343,11 +379,16 @@ def login_user():
         # Comparar la contraseña enviada con la almacenada (hasheada)
         if not bcrypt.checkpw(password.encode('utf-8'), stored_hashed.encode('utf-8')):
             return jsonify({"error": "Contraseña incorrecta."}), 401
+        
+
+        is_admin = user.get('is_admin', False)
+
 
         # Generar token de login válido por 5 minutos
         login_payload = {
             "user_id": user_id,
             "email": email,
+            "role": "admin" if is_admin else "user", 
             "exp": datetime.utcnow() + timedelta(minutes=5)
         }
         login_token = jwt.encode(login_payload, SECRET_KEY, algorithm=ALGORITHM)
