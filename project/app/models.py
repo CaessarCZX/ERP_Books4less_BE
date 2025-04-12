@@ -34,3 +34,18 @@ class UserFiles(db.Model):
     
     def __repr__(self):
         return f'<UserFile {self.filename}>'
+
+class ItemComparison(db.Model):
+    __tablename__ = 'item_comparison'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String(100), nullable=False)
+    item_number = db.Column(db.String(50), nullable=False)  # Columna "No."
+    description = db.Column(db.String(255))  # Columna "Description"
+    is_matched = db.Column(db.Boolean, default=False)
+    matched_with = db.Column(db.String(50))  # ID del item con el que coincidió
+    source_file = db.Column(db.String(255))  # Archivo de origen
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    def __repr__(self):
+        return f'<ItemComparison {self.item_number} - {self.description}>'

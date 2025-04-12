@@ -1,15 +1,22 @@
-from flask import Blueprint, jsonify, request, current_app, make_response, send_file
-from app.services import upload_to_supabase, download_file_from_supabase, process_file, create_pdf, create_csv, delete_old_files
-from app import db
+
+import io
 import os
 import uuid
 import traceback
+import time
+import bcrypt
+import jwt
 import pandas as pd
-from datetime import datetime
+from app import db
+from functools import wraps
+from datetime import datetime, timedelta
 from werkzeug.utils import secure_filename
 from supabase import create_client
 from config.config import Config
-import io
+from flask import Blueprint, jsonify, request, current_app, make_response, send_file
+from app.services import upload_to_supabase, download_file_from_supabase, process_file, create_pdf, create_csv, delete_old_files
+
+
 
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_API_KEY)
 
@@ -25,7 +32,349 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # Limpieza de archivos antiguos
 delete_old_files()
 
+# para el login
+# Debes tener definida en tu configuración una clave secreta
+SECRET_KEY = "clavesupersecretanomanches"  # Cambia esto por tu clave segura
+ALGORITHM = "HS256"
+
+# decorador para autenticacion de usuario 
+def token_required(role=None):
+    def decorator(f):
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            auth_header = request.headers.get('Authorization')
+
+            if not auth_header or not auth_header.startswith('Bearer '):
+                return jsonify({"error": "Token no proporcionado o malformado."}), 401
+
+            token = auth_header.split(' ')[1]
+
+            try:
+                payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            except jwt.ExpiredSignatureError:
+                return jsonify({"error": "Token expirado."}), 401
+            except jwt.InvalidTokenError:
+                return jsonify({"error": "Token inválido."}), 401
+
+            # Verificación de rol (si se requiere uno específico)
+            if role:
+                if payload.get("role") != role:
+                    return jsonify({"error": "Acceso denegado. Permiso insuficiente."}), 403
+
+            # Adjunta el payload a la request si quieres usarlo en las rutas
+            request.user = payload
+
+            return f(*args, **kwargs)
+        return wrapped
+    return decorator
+
+# @token_required()  # cualquier usuario autenticado
+# @token_required(role='admin')  # solo admins
+
+@main.route('/api/login', methods=['POST'])
+def login_user():
+    try:
+        data = request.json
+        email = data.get('email')
+        password = data.get('password')
+        
+        # Validar que ambos campos estén presentes
+        if not email or not password:
+            return jsonify({"error": "El email y la contraseña son obligatorios."}), 400
+
+        # Buscar el usuario en la base de datos (se seleccionan id, email y password)
+        user_query = supabase.table('users').select('id, email, password').eq('email', email).execute()
+        if not user_query.data or len(user_query.data) == 0:
+            return jsonify({"error": "Usuario no encontrado."}), 404
+
+        # Obtener el primer registro (se asume que el email es único)
+        user = user_query.data[0]
+        user_id = user.get('id')
+        stored_hashed = user.get('password')
+
+        # Comparar la contraseña enviada con la almacenada (hasheada)
+        if not bcrypt.checkpw(password.encode('utf-8'), stored_hashed.encode('utf-8')):
+            return jsonify({"error": "Contraseña incorrecta."}), 401
+        
+
+        is_admin = user.get('is_admin', False)
+
+
+        # Generar token de login válido por 5 minutos
+        login_payload = {
+            "user_id": user_id,
+            "email": email,
+            "role": "admin" if is_admin else "user", 
+            "exp": datetime.utcnow() + timedelta(minutes=5)
+        }
+        login_token = jwt.encode(login_payload, SECRET_KEY, algorithm=ALGORITHM)
+
+        # Generar token de sesión válido por 1 día
+        session_payload = {
+            "user_id": user_id,
+            "email": email,
+            "exp": datetime.utcnow() + timedelta(days=1)
+        }
+        session_token = jwt.encode(session_payload, SECRET_KEY, algorithm=ALGORITHM)
+
+        return jsonify({
+            "login_token": login_token,
+            "session_token": session_token,
+            "user_id": user_id,
+            "email": email
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
     
+
+@main.route('/api/register', methods=['POST'])
+def register_user():
+    try:
+        data = request.json
+        email = data.get('email')
+        password = data.get('password')
+        confirm_password = data.get('confirm_password')
+
+        if not email or not password or not confirm_password:
+            return jsonify({'error': 'Todos los campos son obligatorios.'}), 400
+
+        if password != confirm_password:
+            return jsonify({'error': 'Las contraseñas no coinciden.'}), 400
+
+        # Verificar si el correo ya está registrado
+        existing_user = supabase.table('users').select('email').eq('email', email).execute()
+        if existing_user.data:
+            return jsonify({'error': 'El correo ya está registrado.'}), 400
+
+        # Hashear la contraseña
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+        # Insertar en Supabase
+        result = supabase.table('users').insert({
+            'email': email,
+            'password': hashed_password,
+            'is_admin': False
+        }).execute()
+
+        # Convertir el APIResponse a diccionario
+        result_dict = result.dict()
+        
+        # Verificar si se encontró un error en el resultado
+        if result_dict.get('error'):
+            return jsonify({'error': result_dict.get('error')}), 500
+
+        # Obtener el ID del usuario recién creado
+        user_id = result_dict['data'][0]['id']
+
+        return jsonify({'message': 'Usuario registrado exitosamente.', 'user_id': user_id}), 201
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+    
+@main.route('/api/change-password', methods=['POST'])
+def change_password():
+    try:
+        data = request.json
+        email = data.get('email')
+        new_password = data.get('new_password')
+        confirm_new_password = data.get('confirm_new_password')
+
+        # Verificar que se envíen todos los campos
+        if not email or not new_password or not confirm_new_password:
+            return jsonify({'error': 'Todos los campos son obligatorios.'}), 400
+
+        # Validar que las contraseñas coincidan
+        if new_password != confirm_new_password:
+            return jsonify({'error': 'Las contraseñas no coinciden.'}), 400
+
+        # Verificar si el usuario existe en la base de datos
+        user_query = supabase.table('users').select('id').eq('email', email).execute()
+        if not user_query.data or len(user_query.data) == 0:
+            return jsonify({'error': 'Usuario no encontrado.'}), 404
+
+        # Hashear la nueva contraseña
+        hashed_new_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+        # Actualizar la contraseña del usuario en Supabase
+        update_result = supabase.table('users').update({
+            'password': hashed_new_password
+        }).eq('email', email).execute()
+
+        # Convertir la respuesta a diccionario para poder acceder a "error"
+        result_dict = update_result.dict()
+        if result_dict.get('error'):
+            return jsonify({'error': result_dict.get('error')}), 500
+
+        return jsonify({'message': 'Contraseña actualizada exitosamente.'}), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@main.route('/api/reference-items', methods=['GET'])
+def get_reference_items():
+    try:
+        user_id = request.args.get('user_id')
+        if not user_id:
+            return jsonify({"error": "user_id es requerido"}), 400
+
+        response = supabase.table('item_reference')\
+            .select('*')\
+            .eq('user_id', user_id)\
+            .order('item_number')\
+            .execute()
+
+        return jsonify({
+            "total_items": len(response.data),
+            "items": response.data
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@main.route('/api/upload-reference', methods=['POST'])
+def upload_reference():
+    try:
+        # Validación básica
+        if 'user_id' not in request.form or 'file' not in request.files:
+            return jsonify({"error": "user_id y file son requeridos"}), 400
+
+        user_id = request.form['user_id']
+        file = request.files['file']
+
+        if file.filename == '':
+            return jsonify({"error": "Nombre de archivo no válido"}), 400
+
+        # Procesamiento del archivo
+        ext = file.filename.split('.')[-1].lower()
+        if ext not in ['csv', 'xlsx']:
+            return jsonify({"error": "Formato no soportado"}), 400
+
+        # Leer archivo directamente a DataFrame sin guardar temporalmente
+        try:
+            if ext == 'xlsx':
+                df = pd.read_excel(file)
+            else:
+                # Leer una muestra para detectar el delimitador
+                sample = file.stream.read(1024).decode('utf-8')
+                file.stream.seek(0)
+                delimiter = ',' if ',' in sample else ';'
+                df = pd.read_csv(file, delimiter=delimiter)
+        except Exception as e:
+            return jsonify({"error": f"Error al leer archivo: {str(e)}"}), 400
+
+        # Validar columnas
+        if not all(col in df.columns for col in ['No.', 'Description']):
+            return jsonify({"error": "El archivo debe contener columnas 'No.' y 'Description'"}), 400
+
+        # Limpieza y preparación de datos
+        df = df[['No.', 'Description']].dropna()
+        df['No.'] = df['No.'].astype(str).str.strip()
+        df['Description'] = df['Description'].astype(str).str.strip()
+
+        # Convertir a formato JSON para Supabase
+        records = df.rename(columns={'No.': 'item_number'}).to_dict('records')
+        
+        # Optimización 1: Usar COPY en lugar de INSERT para grandes volúmenes
+        if len(records) > 1000:
+            # Crear archivo temporal CSV
+            temp_csv = os.path.join(UPLOAD_FOLDER, f"temp_ref_{uuid.uuid4().hex}.csv")
+            df.rename(columns={'No.': 'item_number'}).to_csv(temp_csv, index=False)
+            
+            try:
+                # Subir CSV a Supabase Storage
+                upload_path = f"temp_refs/{user_id}/{os.path.basename(temp_csv)}"
+                with open(temp_csv, 'rb') as f:
+                    supabase.storage.from_('uploads').upload(upload_path, f)
+                
+                # Ejecutar COPY desde CSV
+                copy_response = supabase.rpc('copy_from_storage', {
+                    'table_name': 'item_reference',
+                    'file_path': upload_path,
+                    'format': 'csv',
+                    'options': {
+                        'header': True,
+                        'delimiter': ',',
+                        'user_id': user_id,
+                        'source_file': secure_filename(file.filename)
+                    }
+                }).execute()
+                
+                os.remove(temp_csv)
+                supabase.storage.from_('uploads').remove([upload_path])
+                
+                return jsonify({
+                    "message": f"{len(records)} items subidos mediante COPY",
+                    "total_items": len(records)
+                }), 200
+                
+            except Exception as e:
+                if os.path.exists(temp_csv):
+                    os.remove(temp_csv)
+                current_app.logger.error(f"Error en COPY: {str(e)}")
+                # Continuar con inserción normal si falla COPY
+
+        # Optimización 2: Inserción masiva en una sola operación
+        records_to_insert = [{
+            'item_number': record['item_number'],
+            'description': record['Description'],
+            'user_id': user_id,
+            'source_file': secure_filename(file.filename)
+        } for record in records]
+
+        try:
+            # Usar inserción masiva con upsert para evitar duplicados
+            response = supabase.table('item_reference').upsert(
+                records_to_insert,
+                on_conflict='item_number,user_id'
+            ).execute()
+            
+            inserted_count = len(response.data) if response.data else 0
+            
+            return jsonify({
+                "message": f"{inserted_count} items subidos/actualizados",
+                "total_items": inserted_count
+            }), 200
+            
+        except Exception as e:
+            current_app.logger.error(f"Error en inserción masiva: {str(e)}")
+            
+            # Optimización 3: Si falla la inserción masiva, intentar por lotes más pequeños
+            batch_size = 500
+            total_inserted = 0
+            errors = []
+
+            for i in range(0, len(records_to_insert), batch_size):
+                batch = records_to_insert[i:i + batch_size]
+                try:
+                    batch_response = supabase.table('item_reference').insert(batch).execute()
+                    if batch_response.data:
+                        total_inserted += len(batch_response.data)
+                except Exception as batch_error:
+                    errors.append(f"Lote {i//batch_size}: {str(batch_error)}")
+
+            if errors:
+                current_app.logger.error(f"Errores en lotes: {errors}")
+                return jsonify({
+                    "message": f"Subida parcial: {total_inserted} items",
+                    "total_items": total_inserted,
+                    "errors": errors
+                }), 207
+
+            return jsonify({
+                "message": f"{total_inserted} items subidos por lotes",
+                "total_items": total_inserted
+            }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Error inesperado: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": "Error interno del servidor",
+            "details": str(e)
+        }), 500
+
 def consolidate_files(file_paths):
     """
     Lee todos los archivos en file_paths (soportados: CSV y XLSX),
@@ -65,29 +414,28 @@ def consolidate_files(file_paths):
 @main.route('/api/process-all', methods=['POST'])
 def process_all():
     """
-    Ruta unificada que:
-      - Recibe múltiples archivos y datos del formulario.
-      - Sube cada archivo a Supabase y lo registra en la BD.
-      - Consolida los datos de todos los archivos en un único archivo Excel.
-      - A partir de ese archivo consolidado genera el CSV y el PDF usando las funciones
-        create_csv y create_pdf (definidas en services.py) sin alterar su lógica.
-      - Sube los archivos generados (CSV y PDF) a Supabase y retorna sus nombres.
+    Ruta optimizada con validación de duplicados que:
+    - Verifica archivos duplicados antes de procesar
+    - Procesa múltiples archivos eficientemente
+    - Realiza comparación rápida con datos de referencia
+    - Genera reportes en CSV y PDF
+    - Retorna resultados detallados de coincidencias
     """
     try:
-        # Validar campos obligatorios
-        user_id = request.form.get('user_id')  # Añadir user_id
+        # Validación inicial
+        start_time = time.time()
+        user_id = request.form.get('user_id')
         discount_rate = request.form.get('discount_rate')
         
         if not user_id or not discount_rate:
             return jsonify({"error": "user_id y discount_rate son obligatorios."}), 400
-        if not discount_rate:
-            return jsonify({"error": "discount_rate es obligatorio."}), 400
+        
         try:
             discount_rate = float(discount_rate)
         except ValueError:
             return jsonify({"error": "discount_rate debe ser numérico."}), 400
 
-        # Otros datos del formulario (se usan en el PDF)
+        # Datos del formulario
         form_data = {
             "purchase_info": request.form.get('purchase_info', ''),
             "order_date": request.form.get('order_date', ''),
@@ -101,108 +449,177 @@ def process_all():
             "payment_terms": request.form.get('payment_terms', '')
         }
 
+        # Procesamiento de archivos
         files = request.files.getlist('files')
         if not files:
             return jsonify({"error": "No se han enviado archivos."}), 400
 
-        allowed_extensions = ['csv', 'xlsx']
+        # Verificar duplicados antes de procesar
+        filenames = [file.filename.strip() for file in files if file]
+        duplicates = {x for x in filenames if filenames.count(x) > 1}
+        
+        if duplicates:
+            return jsonify({
+                "error": "Archivos duplicados detectados",
+                "duplicates": list(duplicates),
+                "message": "Por favor cambie los nombres de los archivos duplicados y vuelva a intentar."
+            }), 400
+
+        # 1. Obtener datos de referencia de forma optimizada
+        reference_time = time.time()
+        reference_response = supabase.table('item_reference')\
+            .select('item_number,description').eq('user_id', user_id).execute()
+        
+        # Convertir a DataFrame y luego a conjunto para búsquedas rápidas
+        reference_items = pd.DataFrame(reference_response.data if reference_response.data else [])
+        reference_set = set(reference_items['item_number'].astype(str).str.strip()) if not reference_items.empty else set()
+        current_app.logger.info(f"Tiempo carga referencia: {time.time() - reference_time:.2f}s")
+
+        # 2. Procesar archivos subidos
+        upload_time = time.time()
         temp_file_paths = []
         errors = []
-        # duplicate_files = []
         uploaded_files = []
-        renamed_files = []  # Para registrar archivos renombrados
 
-        # Procesar cada archivo recibido
         for file in files:
             if not file:
                 continue
+                
             original_filename = file.filename.strip()
             ext = original_filename.split('.')[-1].lower()
-            if ext not in allowed_extensions:
+            
+            if ext not in ['csv', 'xlsx']:
                 errors.append({"file": original_filename, "error": "Formato no soportado."})
                 continue
 
-            # Generar nombre seguro con user_id, timestamp y nombre original
-            # timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            base_name = secure_filename(original_filename.rsplit('.', 1)[0])
-            # new_filename = f"{timestamp}_{base_name}.{ext}"
-            new_filename = f"{base_name}.{ext}"
+            try:
+                # Guardar archivo temporal
+                new_filename = f"{secure_filename(original_filename.rsplit('.', 1)[0])}.{ext}"
+                temp_path = os.path.join(UPLOAD_FOLDER, new_filename)
+                file.save(temp_path)
+                temp_file_paths.append(temp_path)
 
+                # Subir a Supabase (en segundo plano)
+                supa_path = f"xlsx/{user_id}/{new_filename}"
+                upload_to_supabase(temp_path, supa_path)
 
-            
-            # Verificar si el nombre ya existe en la base de datos
-           
-
-            temp_path = os.path.join(UPLOAD_FOLDER, new_filename)
-            file.save(temp_path)
-            temp_file_paths.append(temp_path)
-
-            # Subir a Supabase y registrar en la BD
-            supa_path = f"xlsx/{user_id}/{new_filename}"  # Cambiar esta línea
-            if upload_to_supabase(temp_path, supa_path) is None:
-                errors.append({"file": original_filename, "error": "Error al subir a Supabase."})
-                os.remove(temp_path)
+                uploaded_files.append({
+                    'original_name': original_filename,
+                    'stored_name': new_filename
+                })
+                
+            except Exception as e:
+                errors.append({"file": original_filename, "error": str(e)})
                 continue
-
-           
-            uploaded_files.append({
-                'original_name': original_filename,  # Guardamos el original solo en la respuesta
-                'stored_name': new_filename
-            })
-        
-      
 
         if not temp_file_paths:
             return jsonify({"error": "No se pudo procesar ningún archivo válido.", "details": errors}), 400
 
-        # Consolidar todos los archivos en uno solo
+        current_app.logger.info(f"Tiempo subida archivos: {time.time() - upload_time:.2f}s")
+
+        # 3. Consolidar archivos con manejo de memoria
+        consolidate_time = time.time()
         consolidated_file, consolidate_error = consolidate_files(temp_file_paths)
         if consolidate_error:
             return jsonify({"error": consolidate_error}), 500
+        current_app.logger.info(f"Tiempo consolidación: {time.time() - consolidate_time:.2f}s")
 
-        # Generar el CSV consolidado
-        # timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        # 4. Generar CSV optimizado
+        csv_time = time.time()
         excel_base = secure_filename(files[0].filename.rsplit('.', 1)[0])
         csv_filename = f"{excel_base}.csv"
         csv_path = os.path.join(DOWNLOAD_FOLDER, csv_filename)
         csv_result = create_csv(consolidated_file, csv_path)
+        
         if "error" in csv_result:
             return jsonify(csv_result), 500
+        current_app.logger.info(f"Tiempo generación CSV: {time.time() - csv_time:.2f}s")
 
-        # Generar el PDF consolidado
+        # 5. Generar PDF
+        pdf_time = time.time()
         pdf_filename = f"{excel_base}.pdf"
         pdf_path = os.path.join(DOWNLOAD_FOLDER, pdf_filename)
         pdf_result = create_pdf(consolidated_file, pdf_path, discount_rate, form_data)
+        
         if "error" in pdf_result:
             return jsonify(pdf_result), 500
+        current_app.logger.info(f"Tiempo generación PDF: {time.time() - pdf_time:.2f}s")
 
-        # Subir CSV y PDF a Supabase
+        # 6. Subir archivos generados (en segundo plano)
         upload_to_supabase(csv_path, f"csv/{user_id}/{csv_filename}")
         upload_to_supabase(pdf_path, f"pdf/{user_id}/{pdf_filename}")
 
-        # Limpiar archivos temporales (archivos individuales y el consolidado)
-        for path in temp_file_paths:
-            if os.path.exists(path):
-                os.remove(path)
-        if os.path.exists(consolidated_file):
-            os.remove(consolidated_file)
+        # 7. Comparación optimizada con datos de referencia
+        compare_time = time.time()
+        comparison_results = {
+            "total_reference_items": len(reference_set),
+            "matched_items_count": 0,
+            "unmatched_items": [],
+            "total_processed_items": 0,
+            "match_percentage": 0
+        }
 
-        return jsonify({
+        try:
+            # Leer solo la columna necesaria para comparación
+            consolidated_df = pd.read_excel(consolidated_file, usecols=['item_id'])
+            processed_items = set(consolidated_df['item_id'].astype(str).str.strip())
+            comparison_results['total_processed_items'] = len(processed_items)
+
+            # Encontrar diferencias de forma optimizada
+            missing_items = reference_set - processed_items
+            
+            # Solo obtener descripciones para items no encontrados (optimización)
+            if missing_items:
+                missing_data = reference_items[reference_items['item_number'].isin(missing_items)]
+                comparison_results['unmatched_items'] = missing_data.to_dict('records')
+            
+            comparison_results['matched_items_count'] = len(reference_set) - len(missing_items)
+            comparison_results['match_percentage'] = round(
+                (comparison_results['matched_items_count'] / len(reference_set)) * 100, 2
+            ) if reference_set else 0
+
+        except Exception as e:
+            current_app.logger.error(f"Error en comparación: {str(e)}")
+            comparison_results['comparison_error'] = str(e)
+
+        current_app.logger.info(f"Tiempo comparación: {time.time() - compare_time:.2f}s")
+
+        # Limpieza de archivos temporales
+        for path in temp_file_paths:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except:
+                pass
+
+        if os.path.exists(consolidated_file):
+            try:
+                os.remove(consolidated_file)
+            except:
+                pass
+
+        # Construir respuesta final
+        total_time = time.time() - start_time
+        response_data = {
             "message": "Procesamiento completado exitosamente.",
+            "processing_time_seconds": round(total_time, 2),
             "download_links": {
                 "csv": f"/download/csv?user_id={user_id}&filename={csv_filename}",
                 "pdf": f"/download/pdf?user_id={user_id}&filename={pdf_filename}"
             },
             "uploaded_files": uploaded_files,
-            "renamed_files": renamed_files,  # Informar sobre archivos renombrados
-            "csv": csv_filename,
-            "pdf": pdf_filename,
+            "comparison_results": comparison_results,
             "errors": errors
-        }), 200
+        }
+
+        return jsonify(response_data), 200
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        current_app.logger.error(f"Error en process-all: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": "Error interno del servidor",
+            "details": str(e)
+        }), 500
     
 @main.route('/api/files', methods=['GET'])
 def list_files():
