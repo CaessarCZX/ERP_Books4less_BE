@@ -42,12 +42,19 @@ def token_required(role=None):
     def decorator(f):
         @wraps(f)
         def wrapped(*args, **kwargs):
+            token = None
+
+            # Buscar token en el header
             auth_header = request.headers.get('Authorization')
+            if auth_header and auth_header.startswith('Bearer '):
+                token = auth_header.split(' ')[1]
 
-            if not auth_header or not auth_header.startswith('Bearer '):
-                return jsonify({"error": "Token no proporcionado o malformado."}), 401
+            # Si no viene en el header, buscar en cookies
+            if not token:
+                token = request.cookies.get('login_token') or request.cookies.get('session_token')
 
-            token = auth_header.split(' ')[1]
+            if not token:
+                return jsonify({"error": "Token no proporcionado."}), 401
 
             try:
                 payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -56,20 +63,24 @@ def token_required(role=None):
             except jwt.InvalidTokenError:
                 return jsonify({"error": "Token inválido."}), 401
 
-            # Verificación de rol (si se requiere uno específico)
             if role:
                 if payload.get("role") != role:
                     return jsonify({"error": "Acceso denegado. Permiso insuficiente."}), 403
 
-            # Adjunta el payload a la request si quieres usarlo en las rutas
             request.user = payload
-
             return f(*args, **kwargs)
         return wrapped
     return decorator
 
 # @token_required()  # cualquier usuario autenticado
 # @token_required(role='admin')  # solo admins
+
+@main.route('/api/logout', methods=['POST'])
+def logout():
+    response = make_response(jsonify({"message": "Sesión cerrada"}), 200)
+    response.delete_cookie('login_token')
+    response.delete_cookie('session_token')
+    return response
 
 @main.route('/api/login', methods=['POST'])
 def login_user():
@@ -78,29 +89,22 @@ def login_user():
         email = data.get('email')
         password = data.get('password')
         
-        # Validar que ambos campos estén presentes
         if not email or not password:
             return jsonify({"error": "El email y la contraseña son obligatorios."}), 400
 
-        # Buscar el usuario en la base de datos (se seleccionan id, email y password)
-        user_query = supabase.table('users').select('id, email, password').eq('email', email).execute()
+        user_query = supabase.table('users').select('id, email, password, is_admin').eq('email', email).execute()
         if not user_query.data or len(user_query.data) == 0:
             return jsonify({"error": "Usuario no encontrado."}), 404
 
-        # Obtener el primer registro (se asume que el email es único)
         user = user_query.data[0]
         user_id = user.get('id')
         stored_hashed = user.get('password')
 
-        # Comparar la contraseña enviada con la almacenada (hasheada)
         if not bcrypt.checkpw(password.encode('utf-8'), stored_hashed.encode('utf-8')):
             return jsonify({"error": "Contraseña incorrecta."}), 401
-        
 
         is_admin = user.get('is_admin', False)
 
-
-        # Generar token de login válido por 5 minutos
         login_payload = {
             "user_id": user_id,
             "email": email,
@@ -109,7 +113,6 @@ def login_user():
         }
         login_token = jwt.encode(login_payload, SECRET_KEY, algorithm=ALGORITHM)
 
-        # Generar token de sesión válido por 1 día
         session_payload = {
             "user_id": user_id,
             "email": email,
@@ -117,12 +120,18 @@ def login_user():
         }
         session_token = jwt.encode(session_payload, SECRET_KEY, algorithm=ALGORITHM)
 
-        return jsonify({
-            "login_token": login_token,
-            "session_token": session_token,
+        # Crear la respuesta con los datos visibles en JSON si quieres, o vacía si solo usas cookies
+        response = make_response(jsonify({
+            "message": "Login exitoso",
             "user_id": user_id,
             "email": email
-        }), 200
+        }), 200)
+
+        # Agregar las cookies
+        response.set_cookie("login_token", login_token, httponly=True, secure=True, samesite='Strict', max_age=300)
+        response.set_cookie("session_token", session_token, httponly=True, secure=True, samesite='Strict', max_age=86400)
+
+        return response
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -212,6 +221,34 @@ def change_password():
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+    
+
+@main.route('/api/protected', methods=['GET'])
+def protected_route():
+    try:
+        # Leer el token desde la cookie
+        session_token = request.cookies.get('session_token')
+
+        if not session_token:
+            return jsonify({"error": "Token de sesión no encontrado."}), 401
+
+        # Decodificar y verificar el token
+        payload = jwt.decode(session_token, SECRET_KEY, algorithms=[ALGORITHM])
+
+        # Puedes acceder a los datos del usuario desde el payload
+        user_id = payload.get('user_id')
+        email = payload.get('email')
+
+        return jsonify({
+            "message": "Acceso concedido",
+            "user_id": user_id,
+            "email": email
+        }), 200
+
+    except jwt.ExpiredSignatureError:
+        return jsonify({"error": "El token ha expirado."}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({"error": "Token inválido."}), 401
 
 @main.route('/api/reference-items', methods=['GET'])
 def get_reference_items():
@@ -628,33 +665,41 @@ def list_files():
         if not user_id:
             return jsonify({"error": "El parámetro user_id es requerido"}), 400
 
-        bucket_name = 'uploads'  # Confirmado que tu bucket se llama 'uploads'
+        tipo_filtro = request.args.get('tipo', '').lower()
         tipos_archivos = ['pdf', 'csv', 'xlsx']
+        if tipo_filtro in tipos_archivos:
+            tipos_a_buscar = [tipo_filtro]
+        else:
+            tipos_a_buscar = tipos_archivos
+
+        # Obtener parámetros de paginación
+        try:
+            page = int(request.args.get('page', 1))
+            limit = int(request.args.get('limit', 10))
+            if page < 1 or limit < 1:
+                raise ValueError
+        except ValueError:
+            return jsonify({"error": "Los parámetros page y limit deben ser enteros positivos"}), 400
+
+        bucket_name = 'uploads'
         archivos = []
 
-        for tipo in tipos_archivos:
+        for tipo in tipos_a_buscar:
+            carpeta = f"{tipo}/{user_id}"
             try:
-                # Construir la ruta correcta: tipo/user_id/
-                carpeta = f"{tipo}/{user_id}"
-                
-                # Listar archivos en Supabase
                 response = supabase.storage.from_(bucket_name).list(carpeta)
-                
                 if not response:
-                    print(f"No se encontraron archivos en {carpeta}")
                     continue
-                
+
                 for file_info in response:
                     if not file_info.get('name') or file_info['name'].startswith('.'):
                         continue
-                    
+
                     nombre_archivo = file_info['name']
                     file_path = f"{carpeta}/{nombre_archivo}"
-                    
+
                     try:
-                        # Obtener URL pública (asegúrate que los archivos son públicos)
                         url_descarga = supabase.storage.from_(bucket_name).get_public_url(file_path)
-                        
                         archivos.append({
                             "nombre": nombre_archivo,
                             "tipo": tipo,
@@ -665,14 +710,28 @@ def list_files():
                     except Exception as e:
                         print(f"Error al obtener URL para {file_path}: {str(e)}")
                         continue
-                    
+
             except Exception as e:
                 print(f"Error al listar {tipo}: {str(e)}")
                 continue
 
+        # Ordenar por fecha (recientes primero)
+        archivos.sort(key=lambda x: x['fecha_subida'], reverse=True)
+
+        total_archivos = len(archivos)
+        inicio = (page - 1) * limit
+        fin = inicio + limit
+        archivos_paginados = archivos[inicio:fin]
+
         return jsonify({
             "success": True,
-            "archivos": archivos
+            "archivos": archivos_paginados,
+            "paginacion": {
+                "total": total_archivos,
+                "page": page,
+                "limit": limit,
+                "pages": (total_archivos + limit - 1) // limit  # Redondeo hacia arriba
+            }
         }), 200
 
     except Exception as e:
