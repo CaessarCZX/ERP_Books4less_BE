@@ -452,12 +452,11 @@ def consolidate_files(file_paths):
 @main.route('/api/process-all', methods=['POST'])
 def process_all():
     """
-    Ruta optimizada con validación de duplicados que:
-    - Verifica archivos duplicados antes de procesar
-    - Procesa múltiples archivos eficientemente
-    - Realiza comparación rápida con datos de referencia
-    - Genera reportes en CSV y PDF
-    - Retorna resultados detallados de coincidencias
+    Endpoint para procesar archivos y generar reportes PDF/CSV
+    - Maneja archivos con nombres duplicados usando timestamps únicos
+    - Formatea correctamente las fechas (solo día/mes/año)
+    - Genera archivos con nombres únicos para evitar conflictos
+    - Incluye manejo robusto de errores
     """
     try:
         # Validación inicial
@@ -473,10 +472,25 @@ def process_all():
         except ValueError:
             return jsonify({"error": "discount_rate debe ser numérico."}), 400
 
-        # Datos del formulario
+        # Función para formatear fecha (solo día/mes/año)
+        def format_date(date_str):
+            try:
+                if not date_str:
+                    return 'N/A'
+                # Manejar formato ISO (2023-08-15T14:30:00Z)
+                if 'T' in date_str:
+                    date_part = date_str.split('T')[0]
+                    date_obj = datetime.strptime(date_part, "%Y-%m-%d")
+                else:
+                    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                return date_obj.strftime("%m/%d/%Y")
+            except:
+                return date_str  # Si falla, devolver el valor original
+
+        # Datos del formulario con fecha formateada
         form_data = {
             "purchase_info": request.form.get('purchase_info', ''),
-            "order_date": request.form.get('order_date', ''),
+            "order_date": format_date(request.form.get('order_date', '')),
             "seller_name": request.form.get('seller_name', ''),
             "seller_PO": request.form.get('seller_PO', ''),
             "seller_address": request.form.get('seller_address', ''),
@@ -492,28 +506,24 @@ def process_all():
         if not files:
             return jsonify({"error": "No se han enviado archivos."}), 400
 
-        # Verificar duplicados antes de procesar
-        filenames = [file.filename.strip() for file in files if file]
-        duplicates = {x for x in filenames if filenames.count(x) > 1}
-        
-        if duplicates:
-            return jsonify({
-                "error": "Archivos duplicados detectados",
-                "duplicates": list(duplicates),
-                "message": "Por favor cambie los nombres de los archivos duplicados y vuelva a intentar."
-            }), 400
+        # Generar timestamp único para nombres de archivo
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # 1. Obtener datos de referencia de forma optimizada
+        # 1. Obtener datos de referencia
         reference_time = time.time()
-        reference_response = supabase.table('item_reference')\
-            .select('item_number,description').eq('user_id', user_id).execute()
+        try:
+            reference_response = supabase.table('item_reference')\
+                .select('item_number,description').eq('user_id', user_id).execute()
+            reference_items = pd.DataFrame(reference_response.data if reference_response.data else [])
+            reference_set = set(reference_items['item_number'].astype(str).str.strip()) if not reference_items.empty else set()
+        except Exception as e:
+            current_app.logger.error(f"Error al obtener referencia: {str(e)}")
+            reference_items = pd.DataFrame()
+            reference_set = set()
         
-        # Convertir a DataFrame y luego a conjunto para búsquedas rápidas
-        reference_items = pd.DataFrame(reference_response.data if reference_response.data else [])
-        reference_set = set(reference_items['item_number'].astype(str).str.strip()) if not reference_items.empty else set()
         current_app.logger.info(f"Tiempo carga referencia: {time.time() - reference_time:.2f}s")
 
-        # 2. Procesar archivos subidos
+        # 2. Procesar archivos subidos con nombres únicos
         upload_time = time.time()
         temp_file_paths = []
         errors = []
@@ -531,20 +541,26 @@ def process_all():
                 continue
 
             try:
-                # Guardar archivo temporal
-                new_filename = f"{secure_filename(original_filename.rsplit('.', 1)[0])}.{ext}"
+                # Crear nombre único con timestamp
+                base_name = secure_filename(original_filename.rsplit('.', 1)[0])
+                new_filename = f"{base_name}_{timestamp}.{ext}"
                 temp_path = os.path.join(UPLOAD_FOLDER, new_filename)
                 file.save(temp_path)
                 temp_file_paths.append(temp_path)
 
-                # Subir a Supabase (en segundo plano)
+                # Subir a Supabase con manejo de duplicados
                 supa_path = f"xlsx/{user_id}/{new_filename}"
-                upload_to_supabase(temp_path, supa_path)
-
-                uploaded_files.append({
-                    'original_name': original_filename,
-                    'stored_name': new_filename
-                })
+                try:
+                    upload_to_supabase(temp_path, supa_path)
+                    uploaded_files.append({
+                        'original_name': original_filename,
+                        'stored_name': new_filename
+                    })
+                except Exception as upload_error:
+                    if 'Duplicate' in str(upload_error):
+                        current_app.logger.warning(f"Archivo duplicado, omitiendo: {supa_path}")
+                        continue
+                    raise
                 
             except Exception as e:
                 errors.append({"file": original_filename, "error": str(e)})
@@ -555,39 +571,51 @@ def process_all():
 
         current_app.logger.info(f"Tiempo subida archivos: {time.time() - upload_time:.2f}s")
 
-        # 3. Consolidar archivos con manejo de memoria
+        # 3. Consolidar archivos
         consolidate_time = time.time()
         consolidated_file, consolidate_error = consolidate_files(temp_file_paths)
         if consolidate_error:
             return jsonify({"error": consolidate_error}), 500
         current_app.logger.info(f"Tiempo consolidación: {time.time() - consolidate_time:.2f}s")
 
-        # 4. Generar CSV optimizado
+        # 4. Generar CSV con nombre único
         csv_time = time.time()
         excel_base = secure_filename(files[0].filename.rsplit('.', 1)[0])
-        csv_filename = f"{excel_base}.csv"
+        csv_filename = f"{excel_base}_{timestamp}.csv"
         csv_path = os.path.join(DOWNLOAD_FOLDER, csv_filename)
-        csv_result = create_csv(consolidated_file, csv_path)
         
-        if "error" in csv_result:
-            return jsonify(csv_result), 500
+        try:
+            csv_result = create_csv(consolidated_file, csv_path)
+            if "error" in csv_result:
+                return jsonify(csv_result), 500
+            
+            # Subir a Supabase
+            upload_to_supabase(csv_path, f"csv/{user_id}/{csv_filename}")
+        except Exception as e:
+            current_app.logger.error(f"Error al generar CSV: {str(e)}")
+            return jsonify({"error": "Error al generar CSV", "details": str(e)}), 500
+        
         current_app.logger.info(f"Tiempo generación CSV: {time.time() - csv_time:.2f}s")
 
-        # 5. Generar PDF
+        # 5. Generar PDF con nombre único
         pdf_time = time.time()
-        pdf_filename = f"{excel_base}.pdf"
+        pdf_filename = f"{excel_base}_{timestamp}.pdf"
         pdf_path = os.path.join(DOWNLOAD_FOLDER, pdf_filename)
-        pdf_result = create_pdf(consolidated_file, pdf_path, discount_rate, form_data)
         
-        if "error" in pdf_result:
-            return jsonify(pdf_result), 500
+        try:
+            pdf_result = create_pdf(consolidated_file, pdf_path, discount_rate, form_data)
+            if "error" in pdf_result:
+                return jsonify(pdf_result), 500
+            
+            # Subir a Supabase
+            upload_to_supabase(pdf_path, f"pdf/{user_id}/{pdf_filename}")
+        except Exception as e:
+            current_app.logger.error(f"Error al generar PDF: {str(e)}")
+            return jsonify({"error": "Error al generar PDF", "details": str(e)}), 500
+        
         current_app.logger.info(f"Tiempo generación PDF: {time.time() - pdf_time:.2f}s")
 
-        # 6. Subir archivos generados (en segundo plano)
-        upload_to_supabase(csv_path, f"csv/{user_id}/{csv_filename}")
-        upload_to_supabase(pdf_path, f"pdf/{user_id}/{pdf_filename}")
-
-        # 7. Comparación optimizada con datos de referencia
+        # 6. Comparación con datos de referencia
         compare_time = time.time()
         comparison_results = {
             "total_reference_items": len(reference_set),
@@ -598,15 +626,12 @@ def process_all():
         }
 
         try:
-            # Leer solo la columna necesaria para comparación
             consolidated_df = pd.read_excel(consolidated_file, usecols=['item_id'])
             processed_items = set(consolidated_df['item_id'].astype(str).str.strip())
             comparison_results['total_processed_items'] = len(processed_items)
 
-            # Encontrar diferencias de forma optimizada
             missing_items = reference_set - processed_items
             
-            # Solo obtener descripciones para items no encontrados (optimización)
             if missing_items:
                 missing_data = reference_items[reference_items['item_number'].isin(missing_items)]
                 comparison_results['unmatched_items'] = missing_data.to_dict('records')
@@ -623,20 +648,14 @@ def process_all():
         current_app.logger.info(f"Tiempo comparación: {time.time() - compare_time:.2f}s")
 
         # Limpieza de archivos temporales
-        for path in temp_file_paths:
+        for path in temp_file_paths + [consolidated_file, csv_path, pdf_path]:
             try:
                 if os.path.exists(path):
                     os.remove(path)
-            except:
-                pass
+            except Exception as e:
+                current_app.logger.warning(f"No se pudo eliminar archivo temporal {path}: {str(e)}")
 
-        if os.path.exists(consolidated_file):
-            try:
-                os.remove(consolidated_file)
-            except:
-                pass
-
-        # Construir respuesta final
+        # Construir respuesta
         total_time = time.time() - start_time
         response_data = {
             "message": "Procesamiento completado exitosamente.",
@@ -658,7 +677,7 @@ def process_all():
             "error": "Error interno del servidor",
             "details": str(e)
         }), 500
-    
+        
 @main.route('/api/files', methods=['GET'])
 def list_files():
     try:
