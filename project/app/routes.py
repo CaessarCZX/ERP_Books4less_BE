@@ -116,6 +116,7 @@ def login_user():
         session_payload = {
             "user_id": user_id,
             "email": email,
+            "role": "admin" if is_admin else "user",
             "exp": datetime.utcnow() + timedelta(days=1)
         }
         session_token = jwt.encode(session_payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -665,12 +666,12 @@ def list_files():
         if not user_id:
             return jsonify({"error": "El parámetro user_id es requerido"}), 400
 
-        tipo_filtro = request.args.get('tipo', '').lower()
-        tipos_archivos = ['pdf', 'csv', 'xlsx']
-        if tipo_filtro in tipos_archivos:
-            tipos_a_buscar = [tipo_filtro]
+        filterType = request.args.get('tipo', '').lower()
+        typeFile = ['pdf', 'csv', 'xlsx']
+        if filterType in typeFile:
+            searchType = [filterType]
         else:
-            tipos_a_buscar = tipos_archivos
+            searchType = typeFile
 
         # Obtener parámetros de paginación
         try:
@@ -681,28 +682,33 @@ def list_files():
         except ValueError:
             return jsonify({"error": "Los parámetros page y limit deben ser enteros positivos"}), 400
 
-        bucket_name = 'uploads'
-        archivos = []
+        search_term = request.args.get('search', '').strip().lower()
 
-        for tipo in tipos_a_buscar:
-            carpeta = f"{tipo}/{user_id}"
+        bucket_name = 'uploads'
+        result_files = []
+
+        for type in searchType:
+            folder = f"{type}/{user_id}"
             try:
-                response = supabase.storage.from_(bucket_name).list(carpeta)
+                response = supabase.storage.from_(bucket_name).list(folder)
                 if not response:
                     continue
 
                 for file_info in response:
-                    if not file_info.get('name') or file_info['name'].startswith('.'):
+                    file_name = file_info.get('name', '')
+                    if not file_name or file_name.startswith('.'):
                         continue
 
-                    nombre_archivo = file_info['name']
-                    file_path = f"{carpeta}/{nombre_archivo}"
+                    if search_term and search_term not in file_name.lower():
+                        continue
+                    
+                    file_path = f"{folder}/{file_name}"
 
                     try:
                         url_descarga = supabase.storage.from_(bucket_name).get_public_url(file_path)
-                        archivos.append({
-                            "nombre": nombre_archivo,
-                            "tipo": tipo,
+                        result_files.append({
+                            "nombre": file_name,
+                            "tipo": type,
                             "fecha_subida": file_info.get('created_at', datetime.now().isoformat()),
                             "tamano": file_info.get('metadata', {}).get('size', 0),
                             "url": url_descarga
@@ -712,25 +718,25 @@ def list_files():
                         continue
 
             except Exception as e:
-                print(f"Error al listar {tipo}: {str(e)}")
+                print(f"Error al listar {type}: {str(e)}")
                 continue
 
         # Ordenar por fecha (recientes primero)
-        archivos.sort(key=lambda x: x['fecha_subida'], reverse=True)
-
-        total_archivos = len(archivos)
-        inicio = (page - 1) * limit
-        fin = inicio + limit
-        archivos_paginados = archivos[inicio:fin]
+        result_files.sort(key=lambda x: x['fecha_subida'], reverse=True)
+        
+        totalFiles = len(result_files)
+        start = (page - 1) * limit
+        end = start + limit
+        paginatedFiles = result_files[start:end]
 
         return jsonify({
             "success": True,
-            "archivos": archivos_paginados,
+            "archivos": paginatedFiles,
             "paginacion": {
-                "total": total_archivos,
+                "total": totalFiles,
                 "page": page,
                 "limit": limit,
-                "pages": (total_archivos + limit - 1) // limit  # Redondeo hacia arriba
+                "pages": (totalFiles + limit - 1) // limit  # Redondeo hacia arriba
             }
         }), 200
 
