@@ -75,6 +75,79 @@ def token_required(role=None):
 # @token_required()  # cualquier usuario autenticado
 # @token_required(role='admin')  # solo admins
 
+@main.route('/api/upload-excel', methods=['POST'])
+def upload_excel():
+    """
+    Endpoint para subir archivos Excel directamente a Supabase sin procesamiento.
+    Los archivos se guardan en la carpeta 'xlsx/{user_id}/'
+    """
+    try:
+        # Verificar que se haya enviado un archivo
+        if 'file' not in request.files:
+            return jsonify({"error": "No se ha enviado ningún archivo"}), 400
+            
+        file = request.files['file']
+        user_id = request.form.get('user_id')
+        
+        # Validaciones básicas
+        if not user_id:
+            return jsonify({"error": "El parámetro user_id es requerido"}), 400
+            
+        if file.filename == '':
+            return jsonify({"error": "Nombre de archivo vacío"}), 400
+            
+        # Verificar que sea un archivo Excel
+        file_extension = os.path.splitext(file.filename)[1].lower()
+        if file_extension not in ['.xlsx', '.xls']:
+            return jsonify({"error": "Solo se permiten archivos Excel (.xlsx, .xls)"}), 400
+        
+        # Crear nombre único para el archivo
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        original_filename = secure_filename(file.filename)
+        new_filename = f"{os.path.splitext(original_filename)[0]}_{timestamp}{file_extension}"
+        
+        # Guardar temporalmente el archivo
+        temp_dir = os.path.join(UPLOAD_FOLDER, "temp_uploads")
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_path = os.path.join(temp_dir, new_filename)
+        file.save(temp_path)
+        
+        # Ruta de destino en Supabase
+        destination_path = f"xlsx/{user_id}/{new_filename}"
+        
+        # Subir a Supabase
+        upload_response = upload_to_supabase(temp_path, destination_path)
+        
+        # Eliminar archivo temporal
+        try:
+            os.remove(temp_path)
+        except Exception as e:
+            print(f"Error al eliminar archivo temporal: {e}")
+        
+        if not upload_response:
+            return jsonify({"error": "Error al subir el archivo a Supabase"}), 500
+            
+        # Obtener URL pública del archivo
+        try:
+            file_url = supabase.storage.from_('uploads').get_public_url(destination_path)
+        except Exception as e:
+            file_url = "URL no disponible"
+            print(f"Error al obtener URL pública: {e}")
+        
+        return jsonify({
+            "message": "Archivo Excel subido exitosamente",
+            "filename": new_filename,
+            "original_filename": original_filename,
+            "file_url": file_url,
+            "destination_path": destination_path
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "error": "Error interno del servidor",
+            "details": str(e)
+        }), 500
+
 @main.route('/api/logout', methods=['POST'])
 def logout():
     response = make_response(jsonify({"message": "Sesión cerrada"}), 200)
@@ -275,11 +348,10 @@ def get_reference_items():
 @main.route('/api/upload-reference', methods=['POST'])
 def upload_reference():
     try:
-        # Validación básica
-        if 'user_id' not in request.form or 'file' not in request.files:
-            return jsonify({"error": "user_id y file son requeridos"}), 400
+        # Validación básica - ya no se necesita user_id
+        if 'file' not in request.files:
+            return jsonify({"error": "El archivo es requerido"}), 400
 
-        user_id = request.form['user_id']
         file = request.files['file']
 
         if file.filename == '':
@@ -290,7 +362,7 @@ def upload_reference():
         if ext not in ['csv', 'xlsx']:
             return jsonify({"error": "Formato no soportado"}), 400
 
-        # Leer archivo directamente a DataFrame sin guardar temporalmente
+        # Leer archivo
         try:
             if ext == 'xlsx':
                 df = pd.read_excel(file)
@@ -312,99 +384,46 @@ def upload_reference():
         df['No.'] = df['No.'].astype(str).str.strip()
         df['Description'] = df['Description'].astype(str).str.strip()
 
-        # Convertir a formato JSON para Supabase
-        records = df.rename(columns={'No.': 'item_number'}).to_dict('records')
+        # Convertir a formato para la base de datos
+        records = df.rename(columns={'No.': 'item_number', 'Description': 'description'}).to_dict('records')
         
-        # Optimización 1: Usar COPY en lugar de INSERT para grandes volúmenes
-        if len(records) > 1000:
-            # Crear archivo temporal CSV
-            temp_csv = os.path.join(UPLOAD_FOLDER, f"temp_ref_{uuid.uuid4().hex}.csv")
-            df.rename(columns={'No.': 'item_number'}).to_csv(temp_csv, index=False)
+        # Primero borrar todos los registros existentes (reemplazo completo)
+        try:
+            # Eliminar todos los registros existentes
+            supabase.table('item_reference').delete().neq('id', 0).execute()
             
-            try:
-                # Subir CSV a Supabase Storage
-                upload_path = f"temp_refs/{user_id}/{os.path.basename(temp_csv)}"
-                with open(temp_csv, 'rb') as f:
-                    supabase.storage.from_('uploads').upload(upload_path, f)
+            # Insertar los nuevos registros
+            if records:
+                # Agregar información del archivo fuente
+                for record in records:
+                    record['source_file'] = secure_filename(file.filename)
                 
-                # Ejecutar COPY desde CSV
-                copy_response = supabase.rpc('copy_from_storage', {
-                    'table_name': 'item_reference',
-                    'file_path': upload_path,
-                    'format': 'csv',
-                    'options': {
-                        'header': True,
-                        'delimiter': ',',
-                        'user_id': user_id,
-                        'source_file': secure_filename(file.filename)
-                    }
-                }).execute()
+                # Insertar en lotes si hay muchos registros
+                batch_size = 1000
+                total_inserted = 0
                 
-                os.remove(temp_csv)
-                supabase.storage.from_('uploads').remove([upload_path])
+                for i in range(0, len(records), batch_size):
+                    batch = records[i:i + batch_size]
+                    response = supabase.table('item_reference').insert(batch).execute()
+                    if response.data:
+                        total_inserted += len(response.data)
                 
                 return jsonify({
-                    "message": f"{len(records)} items subidos mediante COPY",
-                    "total_items": len(records)
+                    "message": f"Base de datos actualizada completamente. {total_inserted} nuevos items subidos",
+                    "total_items": total_inserted
+                }), 200
+            else:
+                return jsonify({
+                    "message": "Base de datos vaciada. No hay nuevos datos para insertar.",
+                    "total_items": 0
                 }), 200
                 
-            except Exception as e:
-                if os.path.exists(temp_csv):
-                    os.remove(temp_csv)
-                current_app.logger.error(f"Error en COPY: {str(e)}")
-                # Continuar con inserción normal si falla COPY
-
-        # Optimización 2: Inserción masiva en una sola operación
-        records_to_insert = [{
-            'item_number': record['item_number'],
-            'description': record['Description'],
-            'user_id': user_id,
-            'source_file': secure_filename(file.filename)
-        } for record in records]
-
-        try:
-            # Usar inserción masiva con upsert para evitar duplicados
-            response = supabase.table('item_reference').upsert(
-                records_to_insert,
-                on_conflict='item_number,user_id'
-            ).execute()
-            
-            inserted_count = len(response.data) if response.data else 0
-            
-            return jsonify({
-                "message": f"{inserted_count} items subidos/actualizados",
-                "total_items": inserted_count
-            }), 200
-            
         except Exception as e:
-            current_app.logger.error(f"Error en inserción masiva: {str(e)}")
-            
-            # Optimización 3: Si falla la inserción masiva, intentar por lotes más pequeños
-            batch_size = 500
-            total_inserted = 0
-            errors = []
-
-            for i in range(0, len(records_to_insert), batch_size):
-                batch = records_to_insert[i:i + batch_size]
-                try:
-                    batch_response = supabase.table('item_reference').insert(batch).execute()
-                    if batch_response.data:
-                        total_inserted += len(batch_response.data)
-                except Exception as batch_error:
-                    errors.append(f"Lote {i//batch_size}: {str(batch_error)}")
-
-            if errors:
-                current_app.logger.error(f"Errores en lotes: {errors}")
-                return jsonify({
-                    "message": f"Subida parcial: {total_inserted} items",
-                    "total_items": total_inserted,
-                    "errors": errors
-                }), 207
-
+            current_app.logger.error(f"Error al actualizar la base de datos: {str(e)}")
             return jsonify({
-                "message": f"{total_inserted} items subidos por lotes",
-                "total_items": total_inserted
-            }), 200
+                "error": "Error al actualizar la base de datos",
+                "details": str(e)
+            }), 500
 
     except Exception as e:
         current_app.logger.error(f"Error inesperado: {str(e)}", exc_info=True)
@@ -412,12 +431,10 @@ def upload_reference():
             "error": "Error interno del servidor",
             "details": str(e)
         }), 500
-
+        
 def consolidate_files(file_paths):
     """
-    Lee todos los archivos en file_paths (soportados: CSV y XLSX),
-    los concatena en un único DataFrame y lo guarda en un archivo Excel temporal.
-    Se usa para consolidar los datos de múltiples archivos.
+    Consolida archivos validando estructura y calculando campos adicionales.
     """
     dfs = []
     for path in file_paths:
@@ -426,27 +443,34 @@ def consolidate_files(file_paths):
             if ext == ".xlsx":
                 df = pd.read_excel(path, engine="openpyxl")
             elif ext == ".csv":
-                # Intentamos leer el CSV de varias maneras
                 try:
                     df = pd.read_csv(path, delimiter=",", engine="python")
-                except Exception as e:
-                    try:
-                        df = pd.read_csv(path, delimiter=";", engine="python")
-                    except Exception as e:
-                        print(f"Error leyendo {path}: {e}")
-                        continue
+                except:
+                    df = pd.read_csv(path, delimiter=";", engine="python")
             else:
                 continue
+                
+            # Validar y calcular campos adicionales para cada archivo
+            if 'us_price' in df.columns and 'quantity' in df.columns:
+                df['us_price'] = pd.to_numeric(df['us_price'], errors='coerce').fillna(0)
+                df['quantity'] = pd.to_numeric(df['quantity'], errors='coerce').fillna(0)
+                df['Extended Retail'] = df['quantity'] * df['us_price']
+                
             dfs.append(df)
         except Exception as e:
-            print(f"Error leyendo {path}: {e}")
+            print(f"Error procesando {path}: {e}")
             continue
+            
     if not dfs:
         return None, "No se pudo leer ningún archivo válido."
+        
     consolidated_df = pd.concat(dfs, ignore_index=True)
+    
+    # Guardar el archivo consolidado procesado
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    consolidated_file = os.path.join(DOWNLOAD_FOLDER, f"{timestamp}_consolidated.xlsx")
+    consolidated_file = os.path.join(DOWNLOAD_FOLDER, f"{timestamp}_consolidado_procesado.xlsx")
     consolidated_df.to_excel(consolidated_file, index=False)
+    
     return consolidated_file, None
 
 @main.route('/api/process-all', methods=['POST'])

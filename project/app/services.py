@@ -76,27 +76,41 @@ def clean_numeric_column(series):
     return pd.to_numeric(cleaned, errors='coerce').fillna(0)
 
 def process_file(input_file, discount_percent):
-    """Convierte un archivo Excel (.xlsx) a CSV y calcula la columna 'Extended @ %'."""
+    """Procesa un archivo Excel validando columnas requeridas y calculando campos adicionales."""
     try:
-        output_csv = os.path.join(DOWNLOAD_FOLDER, "archivo_convertido.csv")
-        file_extension = os.path.splitext(input_file)[1].lower()
+        # Columnas requeridas
+        required_columns = [
+            'series_code', 'series_desc', 'pallet_id', 'pallet_available_flag',
+            'item_id', 'item_desc', 'family_code', 'reporting_group_desc',
+            'publisher_desc', 'imprint_desc', 'us_price', 'can_price',
+            'pub_date', 'quantity'
+        ]
         
+        # Leer el archivo
+        file_extension = os.path.splitext(input_file)[1].lower()
         if file_extension == ".xlsx":
-            df_original = pd.read_excel(input_file, sheet_name=0, engine="openpyxl")
+            df = pd.read_excel(input_file, sheet_name=0, engine="openpyxl")
         elif file_extension == ".csv":
-            df_original = pd.read_csv(input_file, delimiter=";")
+            df = pd.read_csv(input_file, delimiter=";")
         else:
             return {"error": "Formato de archivo no soportado"}
         
-        df_original.dropna(how='all', inplace=True)
-        df_original.to_csv(output_csv, index=False)
+        # Validar columnas requeridas
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            return {"error": f"Faltan columnas requeridas: {', '.join(missing_columns)}"}
         
-        if 'Extended Retail' in df_original.columns:
-            df_original['Extended Retail'] = clean_numeric_column(df_original['Extended Retail'])
-            df_original['Extended @ %'] = df_original.apply(
-                lambda row: row['Extended Retail'] * (discount_percent / 100) if pd.notna(row['Extended Retail']) else 0,
-                axis=1
-            )
+        # Limpieza de datos numéricos
+        df['quantity'] = pd.to_numeric(df['quantity'], errors='coerce').fillna(0)
+        df['us_price'] = pd.to_numeric(df['us_price'], errors='coerce').fillna(0)
+        
+        # Calcular columnas derivadas
+        df['Extended Retail'] = df['quantity'] * df['us_price']
+        df['Extended @ 3%'] = df['Extended Retail'] * (discount_percent / 100)
+        
+        # Guardar el archivo procesado (en lugar del original)
+        output_csv = os.path.join(DOWNLOAD_FOLDER, "archivo_procesado.csv")
+        df.to_csv(output_csv, index=False)
         
         return output_csv
     except Exception as e:
@@ -108,8 +122,23 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
       - Información de Vendor y Ship To.
       - Shipping Method y Payment Terms en una tabla adicional.
       - Productos (con columnas L/N, Item Number, Description, Ordered y Ext. Price).
+    
+    Cambios implementados:
+    - Validación de columnas requeridas
+    - Cálculo automático de Extended Retail (quantity * us_price)
+    - Cálculo de Extended @ % basado en el descuento
+    - Agrupación por pallet_id para el resumen
     """
     try:
+        # Columnas requeridas
+        required_columns = [
+            'series_code', 'series_desc', 'pallet_id', 'pallet_available_flag',
+            'item_id', 'item_desc', 'family_code', 'reporting_group_desc',
+            'publisher_desc', 'imprint_desc', 'us_price', 'can_price',
+            'pub_date', 'quantity'
+        ]
+        
+        # Leer archivo de entrada
         file_extension = os.path.splitext(input_file)[1].lower()
         if file_extension == ".xlsx":
             df = pd.read_excel(input_file, sheet_name=0, engine="openpyxl")
@@ -118,34 +147,30 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
         else:
             return {"error": "Formato de archivo no soportado"}
         
-        # Estandarizar nombres de columnas para la generación del PDF.
-        # Se espera usar 'pallet_id' y 'series_desc'. Si no existen, se renombran desde 'item_id' y 'item_desc'
-        if 'pallet_id' not in df.columns and 'item_id' in df.columns:
-            df.rename(columns={'item_id': 'pallet_id'}, inplace=True)
-        if 'series_desc' not in df.columns and 'item_desc' in df.columns:
-            df.rename(columns={'item_desc': 'series_desc'}, inplace=True)
-        
-        # Limpiar columnas numéricas
-        if 'Extended Retail' in df.columns:
-            df['Extended Retail'] = clean_numeric_column(df['Extended Retail'])
-        if 'quantity' in df.columns:
-            df['quantity'] = pd.to_numeric(df['quantity'], errors='coerce').fillna(0)
-        
-        # Calcular las columnas derivadas
-        df["Extended @ %"] = df["Extended Retail"] * (1 - discount_percent/100)
-        df["Total Retail"] = df["Extended Retail"] * df["quantity"]
-        df["Total @ %"] = df["Extended @ %"] * df["quantity"]
-        df["Diferencia"] = df["Total Retail"] - df["Total @ %"]
+        # Validar columnas requeridas
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            return {"error": f"Faltan columnas requeridas: {', '.join(missing_columns)}"}
 
-        # Agrupar por pallet_id
-        grouped = df.groupby("pallet_id").agg({
-            "series_desc": "first",
-            "quantity": "sum",
-            "Total Retail": "sum",
-            "Total @ %": "sum",
-            "Diferencia": "sum"
+        # Limpieza de datos numéricos
+        df['quantity'] = pd.to_numeric(df['quantity'], errors='coerce').fillna(0)
+        df['us_price'] = pd.to_numeric(df['us_price'], errors='coerce').fillna(0)
+        
+        # Calcular las columnas derivadas EXACTAMENTE como en tu ejemplo corregido
+        df['Extended Retail'] = df['quantity'] * df['us_price']
+        df['Extended @ %'] = df['Extended Retail'] * (discount_percent)
+        df['Extended Price'] = df['Extended @ %'] * df['quantity']  # Nueva columna para el total por item
+        
+        # Agrupar por pallet_id para el resumen
+        grouped = df.groupby('pallet_id').agg({
+            'series_desc': 'first',
+            'quantity': 'sum',
+            'Extended Retail': 'sum',
+            'Extended @ %': 'sum',
+            'Extended Price': 'sum'  # Suma de Extended @ % * quantity
         }).reset_index()
         
+        # Configuración del PDF
         c = canvas.Canvas(output_pdf, pagesize=letter)
         width, height = letter
 
@@ -212,7 +237,7 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
         ship_to_table.wrapOn(c, width, height)
         ship_to_table.drawOn(c, width - 300, height - 180)
         
-        # Tabla para Shipping Method y Payment Terms (una sola tabla, pegada a las anteriores)
+        # Tabla para Shipping Method y Payment Terms
         shipping_data = [
             ["Shipping Method", "Payment Terms"],
             [form_data.get('shipping_method', 'N/A'), form_data.get('payment_terms', 'N/A')]
@@ -229,34 +254,31 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
         shipping_table.wrapOn(c, width, height)
         shipping_table.drawOn(c, 50, height - 250)
         
-        # Tabla de productos
-        # Queremos: L/N, Item Number, Description y Ordered, y el Discounted Price (renombrado a Ext. Price)
+        # Tabla de productos (usando los datos agrupados por pallet_id)
         product_header = ["L/N", "Item Number", "Description", "Ordered", "Ext. Price"]
         product_data = [product_header]
         max_desc_chars = 40  # máximo número de caracteres para la descripción
         
-        # Usamos el valor de "Total @ %" como precio con descuento
         for i, row in grouped.iterrows():
-            desc = row['series_desc']
-            if isinstance(desc, str) and len(desc) > max_desc_chars:
-                desc = desc[:max_desc_chars] + "..."
+            desc = str(row['series_desc'])[:max_desc_chars] + "..." if len(str(row['series_desc'])) > max_desc_chars else str(row['series_desc'])
             product_data.append([
                 i + 1,
                 row['pallet_id'],
                 desc,
                 int(row['quantity']),
-                f"${row['Total @ %']:,.2f}"
+                f"${row['Extended Price']:,.2f}"  # Mostramos el Extended Price sumado
             ])
-        # Fila de totales: sólo sumar Ordered y Ext. Price
+        
+        # Fila de totales
         total_ordered = int(grouped['quantity'].sum())
-        total_discounted = grouped['Total @ %'].sum()
+        total_extended_price = grouped['Extended Price'].sum()
         product_data.append([
             "", "", "TOTAL:",
             total_ordered,
-            f"${total_discounted:,.2f}"
+            f"${total_extended_price:,.2f}"
         ])
 
-        col_widths = [30, 80, 228, 70, 90]  # Ajusta el ancho de la descripción si es necesario
+        col_widths = [30, 80, 228, 70, 90]
         product_table = Table(product_data, colWidths=col_widths)
         product_table.setStyle(TableStyle([
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
