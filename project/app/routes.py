@@ -125,7 +125,8 @@ def login_user():
         response = make_response(jsonify({
             "message": "Login exitoso",
             "user_id": user_id,
-            "email": email
+            "email": email,
+            "isAdmin": is_admin,
         }), 200)
 
         # Agregar las cookies
