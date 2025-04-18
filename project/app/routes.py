@@ -348,7 +348,6 @@ def get_reference_items():
 @main.route('/api/upload-reference', methods=['POST'])
 def upload_reference():
     try:
-        # Validación básica - ya no se necesita user_id
         if 'file' not in request.files:
             return jsonify({"error": "El archivo es requerido"}), 400
 
@@ -357,73 +356,75 @@ def upload_reference():
         if file.filename == '':
             return jsonify({"error": "Nombre de archivo no válido"}), 400
 
-        # Procesamiento del archivo
         ext = file.filename.split('.')[-1].lower()
         if ext not in ['csv', 'xlsx']:
             return jsonify({"error": "Formato no soportado"}), 400
 
-        # Leer archivo
         try:
             if ext == 'xlsx':
                 df = pd.read_excel(file)
             else:
-                # Leer una muestra para detectar el delimitador
                 sample = file.stream.read(1024).decode('utf-8')
                 file.stream.seek(0)
                 delimiter = ',' if ',' in sample else ';'
                 df = pd.read_csv(file, delimiter=delimiter)
-        except Exception as e:
-            return jsonify({"error": f"Error al leer archivo: {str(e)}"}), 400
-
-        # Validar columnas
-        if not all(col in df.columns for col in ['No.', 'Description']):
-            return jsonify({"error": "El archivo debe contener columnas 'No.' y 'Description'"}), 400
-
-        # Limpieza y preparación de datos
-        df = df[['No.', 'Description']].dropna()
-        df['No.'] = df['No.'].astype(str).str.strip()
-        df['Description'] = df['Description'].astype(str).str.strip()
-
-        # Convertir a formato para la base de datos
-        records = df.rename(columns={'No.': 'item_number', 'Description': 'description'}).to_dict('records')
-        
-        # Primero borrar todos los registros existentes (reemplazo completo)
-        try:
-            # Eliminar todos los registros existentes
-            supabase.table('item_reference').delete().neq('id', 0).execute()
+                
+            print(f"Registros totales en archivo: {len(df)}")
             
-            # Insertar los nuevos registros
-            if records:
-                # Agregar información del archivo fuente
-                for record in records:
-                    record['source_file'] = secure_filename(file.filename)
+            df.columns = df.columns.str.strip().str.lower()
+            if not all(col in df.columns for col in ['no.', 'description']):
+                return jsonify({"error": "El archivo debe contener columnas 'No.' y 'Description'"}), 400
+
+            # Limpieza y conversión segura a tipos nativos
+            df = df[['no.', 'description']].fillna({'no.': '', 'description': ''})
+            df['no.'] = df['no.'].astype(str).str.strip()
+            df['description'] = df['description'].astype(str).str.strip()
+
+            # Preparar registros asegurando tipos serializables
+            records = []
+            for _, row in df.iterrows():
+                records.append({
+                    'item_number': str(row['no.']),
+                    'description': str(row['description']),
+                    'source_file': secure_filename(file.filename)
+                })
+
+            print(f"Registros preparados para inserción: {len(records)}")
+
+            try:
+                # Eliminar existentes
+                supabase.table('item_reference').delete().neq('id', 0).execute()
                 
-                # Insertar en lotes si hay muchos registros
-                batch_size = 1000
-                total_inserted = 0
-                
-                for i in range(0, len(records), batch_size):
-                    batch = records[i:i + batch_size]
-                    response = supabase.table('item_reference').insert(batch).execute()
-                    if response.data:
-                        total_inserted += len(response.data)
-                
+                if records:
+                    batch_size = 1000
+                    total_inserted = 0
+                    
+                    for i in range(0, len(records), batch_size):
+                        batch = records[i:i + batch_size]
+                        response = supabase.table('item_reference').insert(batch).execute()
+                        if response.data:
+                            total_inserted += len(response.data)
+                    
+                    print(f"Registros insertados exitosamente: {total_inserted}")
+                    return jsonify({
+                        "message": f"Base de datos actualizada. {total_inserted} items subidos",
+                        "total_items": total_inserted
+                    }), 200
+                else:
+                    return jsonify({
+                        "message": "Base de datos vaciada. No hay datos para insertar.",
+                        "total_items": 0
+                    }), 200
+                    
+            except Exception as e:
+                current_app.logger.error(f"Error en inserción: {str(e)}", exc_info=True)
                 return jsonify({
-                    "message": f"Base de datos actualizada completamente. {total_inserted} nuevos items subidos",
-                    "total_items": total_inserted
-                }), 200
-            else:
-                return jsonify({
-                    "message": "Base de datos vaciada. No hay nuevos datos para insertar.",
-                    "total_items": 0
-                }), 200
-                
+                    "error": "Error al actualizar la base de datos",
+                    "details": str(e)
+                }), 500
+
         except Exception as e:
-            current_app.logger.error(f"Error al actualizar la base de datos: {str(e)}")
-            return jsonify({
-                "error": "Error al actualizar la base de datos",
-                "details": str(e)
-            }), 500
+            return jsonify({"error": f"Error al procesar archivo: {str(e)}"}), 400
 
     except Exception as e:
         current_app.logger.error(f"Error inesperado: {str(e)}", exc_info=True)

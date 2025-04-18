@@ -189,8 +189,9 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
         po_table = Table(po_data, colWidths=[100, 100])
         po_table.setStyle(TableStyle([
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('BACKGROUND', (0, 0), (0, 1), colors.lightgrey),  # Aplica fondo gris a las primeras dos celdas de la primera columna
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTNAME', (0, 0), (0, 1), 'Helvetica-Bold'),  # Aplica negrita a todo el encabezado (primeras dos filas)
             ('FONTSIZE', (0, 0), (-1, -1), 10),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
         ]))
@@ -207,13 +208,13 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
         vendor_table = Table(vendor_data, colWidths=[225, 225])
         vendor_table.setStyle(TableStyle([
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTNAME', (1, 0), (-1, -1), 'Helvetica'),
             ('FONTSIZE', (0, 0), (-1, -1), 10),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ]))
+            ]))
         vendor_table.wrapOn(c, width, height)
         vendor_table.drawOn(c, 50, height - 180)
         
@@ -227,12 +228,12 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
         ship_to_table = Table(ship_to_data, colWidths=[225, 225])
         ship_to_table.setStyle(TableStyle([
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
             ('FONTNAME', (1, 0), (-1, -1), 'Helvetica'),
             ('FONTSIZE', (0, 0), (-1, -1), 10),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0),
         ]))
         ship_to_table.wrapOn(c, width, height)
         ship_to_table.drawOn(c, width - 300, height - 180)
