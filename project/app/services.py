@@ -158,7 +158,7 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
         
         # Calcular las columnas derivadas EXACTAMENTE como en tu ejemplo corregido
         df['Extended Retail'] = df['quantity'] * df['us_price']
-        df['Extended @ %'] = df['Extended Retail'] * (discount_percent)
+        df['Extended @ %'] = df['us_price'] * (discount_percent)/100
         df['Extended Price'] = df['Extended @ %'] * df['quantity']  # Nueva columna para el total por item
         
         # Agrupar por pallet_id para el resumen
