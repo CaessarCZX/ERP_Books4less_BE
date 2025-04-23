@@ -479,10 +479,9 @@ def consolidate_files(file_paths):
 def process_all():
     """
     Endpoint para procesar archivos y generar reportes PDF/CSV
-    - Maneja archivos con nombres duplicados usando timestamps únicos
-    - Formatea correctamente las fechas (solo día/mes/año)
-    - Genera archivos con nombres únicos para evitar conflictos
-    - Incluye manejo robusto de errores
+    - Compara los item_id del archivo con item_number de item_reference
+    - Muestra estadísticas de coincidencias
+    - Identifica qué archivos no están en la tabla de referencia
     """
     try:
         # Validación inicial
@@ -503,7 +502,6 @@ def process_all():
             try:
                 if not date_str:
                     return 'N/A'
-                # Manejar formato ISO (2023-08-15T14:30:00Z)
                 if 'T' in date_str:
                     date_part = date_str.split('T')[0]
                     date_obj = datetime.strptime(date_part, "%Y-%m-%d")
@@ -511,7 +509,7 @@ def process_all():
                     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
                 return date_obj.strftime("%m/%d/%Y")
             except:
-                return date_str  # Si falla, devolver el valor original
+                return date_str
 
         # Datos del formulario con fecha formateada
         form_data = {
@@ -539,7 +537,7 @@ def process_all():
         reference_time = time.time()
         try:
             reference_response = supabase.table('item_reference')\
-                .select('item_number,description').eq('user_id', user_id).execute()
+                .select('item_number,description').execute()
             reference_items = pd.DataFrame(reference_response.data if reference_response.data else [])
             reference_set = set(reference_items['item_number'].astype(str).str.strip()) if not reference_items.empty else set()
         except Exception as e:
@@ -549,11 +547,12 @@ def process_all():
         
         current_app.logger.info(f"Tiempo carga referencia: {time.time() - reference_time:.2f}s")
 
-        # 2. Procesar archivos subidos con nombres únicos
+        # 2. Procesar archivos subidos
         upload_time = time.time()
         temp_file_paths = []
         errors = []
         uploaded_files = []
+        all_processed_items = set()
 
         for file in files:
             if not file:
@@ -574,19 +573,36 @@ def process_all():
                 file.save(temp_path)
                 temp_file_paths.append(temp_path)
 
-                # Subir a Supabase con manejo de duplicados
+                # Leer archivo y extraer item_ids
+                if ext == 'xlsx':
+                    df = pd.read_excel(temp_path)
+                else:
+                    sample = file.stream.read(1024).decode('utf-8')
+                    file.stream.seek(0)
+                    delimiter = ',' if ',' in sample else ';'
+                    df = pd.read_csv(temp_path, delimiter=delimiter)
+                
+                # Normalizar nombres de columnas
+                df.columns = df.columns.str.strip().str.lower()
+                
+                # Buscar columna que contiene los IDs (item_id, no., etc.)
+                id_column = None
+                for col in ['item_id', 'no.', 'no', 'item_number', 'number']:
+                    if col in df.columns:
+                        id_column = col
+                        break
+                
+                if id_column:
+                    items_in_file = set(df[id_column].astype(str).str.strip())
+                    all_processed_items.update(items_in_file)
+                
+                # Subir a Supabase
                 supa_path = f"xlsx/{user_id}/{new_filename}"
-                try:
-                    upload_to_supabase(temp_path, supa_path)
-                    uploaded_files.append({
-                        'original_name': original_filename,
-                        'stored_name': new_filename
-                    })
-                except Exception as upload_error:
-                    if 'Duplicate' in str(upload_error):
-                        current_app.logger.warning(f"Archivo duplicado, omitiendo: {supa_path}")
-                        continue
-                    raise
+                upload_to_supabase(temp_path, supa_path)
+                uploaded_files.append({
+                    'original_name': original_filename,
+                    'stored_name': new_filename
+                })
                 
             except Exception as e:
                 errors.append({"file": original_filename, "error": str(e)})
@@ -604,7 +620,7 @@ def process_all():
             return jsonify({"error": consolidate_error}), 500
         current_app.logger.info(f"Tiempo consolidación: {time.time() - consolidate_time:.2f}s")
 
-        # 4. Generar CSV con nombre único
+        # 4. Generar CSV
         csv_time = time.time()
         excel_base = secure_filename(files[0].filename.rsplit('.', 1)[0])
         csv_filename = f"{excel_base}_{timestamp}.csv"
@@ -614,8 +630,6 @@ def process_all():
             csv_result = create_csv(consolidated_file, csv_path)
             if "error" in csv_result:
                 return jsonify(csv_result), 500
-            
-            # Subir a Supabase
             upload_to_supabase(csv_path, f"csv/{user_id}/{csv_filename}")
         except Exception as e:
             current_app.logger.error(f"Error al generar CSV: {str(e)}")
@@ -623,7 +637,7 @@ def process_all():
         
         current_app.logger.info(f"Tiempo generación CSV: {time.time() - csv_time:.2f}s")
 
-        # 5. Generar PDF con nombre único
+        # 5. Generar PDF
         pdf_time = time.time()
         pdf_filename = f"{excel_base}_{timestamp}.pdf"
         pdf_path = os.path.join(DOWNLOAD_FOLDER, pdf_filename)
@@ -632,8 +646,6 @@ def process_all():
             pdf_result = create_pdf(consolidated_file, pdf_path, discount_rate, form_data)
             if "error" in pdf_result:
                 return jsonify(pdf_result), 500
-            
-            # Subir a Supabase
             upload_to_supabase(pdf_path, f"pdf/{user_id}/{pdf_filename}")
         except Exception as e:
             current_app.logger.error(f"Error al generar PDF: {str(e)}")
@@ -641,38 +653,75 @@ def process_all():
         
         current_app.logger.info(f"Tiempo generación PDF: {time.time() - pdf_time:.2f}s")
 
-        # 6. Comparación con datos de referencia
+        # 6. Comparación optimizada para grandes volúmenes de datos
         compare_time = time.time()
+
+        # Obtener TODOS los item_number de la referencia (los 113765+ registros)
+        try:
+            # Consulta paginada para manejar grandes volúmenes
+            reference_items = []
+            page = 0
+            while True:
+                response = supabase.table('item_reference')\
+                    .select('item_number')\
+                    .range(page*1000, (page+1)*1000-1)\
+                    .execute()
+                if not response.data:
+                    break
+                reference_items.extend([str(item['item_number']).strip() for item in response.data])
+                page += 1
+            
+            reference_set = set(reference_items)
+        except Exception as e:
+            current_app.logger.error(f"Error al obtener referencia: {str(e)}")
+            reference_items = []
+            reference_set = set()
+
+        # Extraer TODOS los item_id de los archivos Excel procesados
+        all_processed_items = set()
+        file_item_mapping = {}
+
+        for file_path in temp_file_paths:
+            try:
+                df = pd.read_excel(file_path)  # Solo Excel como solicitaste
+                
+                # Buscar la columna item_id (exactamente ese nombre)
+                if 'item_id' not in df.columns:
+                    # Si no existe, buscar columnas alternativas
+                    id_col = next((col for col in df.columns if col.lower() in ['item_id', 'no.', 'item_number', 'number']), None)
+                else:
+                    id_col = 'item_id'
+                
+                if id_col:
+                    # Limpieza y estandarización
+                    df[id_col] = df[id_col].astype(str).str.strip()
+                    items_in_file = set(df[id_col].dropna().unique())
+                    all_processed_items.update(items_in_file)
+                    
+                    # Mapeo para trazabilidad
+                    for item in items_in_file:
+                        if item not in file_item_mapping:
+                            file_item_mapping[item] = []
+                        file_item_mapping[item].append(os.path.basename(file_path))
+                            
+            except Exception as e:
+                current_app.logger.error(f"Error procesando archivo {file_path}: {str(e)}")
+                continue
+
+        # Comparación final - Solo items en archivos que NO están en referencia
+        unmatched_items = all_processed_items - reference_set
+
+        # Construcción del resultado manteniendo tu estructura original
         comparison_results = {
             "total_reference_items": len(reference_set),
-            "matched_items_count": 0,
-            "unmatched_items": [],
-            "total_processed_items": 0,
-            "match_percentage": 0
+            "total_processed_items": len(all_processed_items),
+            "matched_items_count": len(all_processed_items) - len(unmatched_items),
+            "unmatched_items": [{"item_id": item, "source_files": file_item_mapping.get(item, [])} for item in unmatched_items],
+            "match_percentage": round((len(all_processed_items) - len(unmatched_items)) / len(all_processed_items) * 100, 2) if all_processed_items else 0,
+            "files_with_missing_references": list(set(f for item in unmatched_items for f in file_item_mapping.get(item, [])))
         }
 
-        try:
-            consolidated_df = pd.read_excel(consolidated_file, usecols=['item_id'])
-            processed_items = set(consolidated_df['item_id'].astype(str).str.strip())
-            comparison_results['total_processed_items'] = len(processed_items)
-
-            missing_items = reference_set - processed_items
-            
-            if missing_items:
-                missing_data = reference_items[reference_items['item_number'].isin(missing_items)]
-                comparison_results['unmatched_items'] = missing_data.to_dict('records')
-            
-            comparison_results['matched_items_count'] = len(reference_set) - len(missing_items)
-            comparison_results['match_percentage'] = round(
-                (comparison_results['matched_items_count'] / len(reference_set)) * 100, 2
-            ) if reference_set else 0
-
-        except Exception as e:
-            current_app.logger.error(f"Error en comparación: {str(e)}")
-            comparison_results['comparison_error'] = str(e)
-
         current_app.logger.info(f"Tiempo comparación: {time.time() - compare_time:.2f}s")
-
         # Limpieza de archivos temporales
         for path in temp_file_paths + [consolidated_file, csv_path, pdf_path]:
             try:
