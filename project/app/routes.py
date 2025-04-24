@@ -653,10 +653,10 @@ def process_all():
         
         current_app.logger.info(f"Tiempo generación PDF: {time.time() - pdf_time:.2f}s")
 
-        # 6. Comparación optimizada para grandes volúmenes de datos
+        # 6. Comparación mejorada que maneja ceros a la izquierda
         compare_time = time.time()
 
-        # Obtener TODOS los item_number de la referencia (los 113765+ registros)
+        # Obtener TODOS los item_number de la referencia conservando ceros a la izquierda
         try:
             # Consulta paginada para manejar grandes volúmenes
             reference_items = []
@@ -668,22 +668,30 @@ def process_all():
                     .execute()
                 if not response.data:
                     break
-                reference_items.extend([str(item['item_number']).strip() for item in response.data])
+                # Conservar los valores exactos como strings (incluyendo ceros a la izquierda)
+                reference_items.extend([str(item['item_number']) for item in response.data])
                 page += 1
             
-            reference_set = set(reference_items)
+            # Crear dos versiones del conjunto de referencia:
+            # 1. Original (conserva ceros a la izquierda)
+            reference_set_original = set(reference_items)
+            # 2. Normalizado (sin ceros a la izquierda para comparación flexible)
+            reference_set_normalized = set([item.lstrip('0') for item in reference_items])
+            
         except Exception as e:
             current_app.logger.error(f"Error al obtener referencia: {str(e)}")
             reference_items = []
-            reference_set = set()
+            reference_set_original = set()
+            reference_set_normalized = set()
 
-        # Extraer TODOS los item_id de los archivos Excel procesados
-        all_processed_items = set()
+        # Extraer TODOS los item_id de los archivos Excel conservando ceros a la izquierda
+        all_processed_items_original = set()
+        all_processed_items_normalized = set()
         file_item_mapping = {}
 
         for file_path in temp_file_paths:
             try:
-                df = pd.read_excel(file_path)  # Solo Excel como solicitaste
+                df = pd.read_excel(file_path)
                 
                 # Buscar la columna item_id (exactamente ese nombre)
                 if 'item_id' not in df.columns:
@@ -693,13 +701,18 @@ def process_all():
                     id_col = 'item_id'
                 
                 if id_col:
-                    # Limpieza y estandarización
+                    # Convertir a string y limpiar espacios
                     df[id_col] = df[id_col].astype(str).str.strip()
-                    items_in_file = set(df[id_col].dropna().unique())
-                    all_processed_items.update(items_in_file)
                     
-                    # Mapeo para trazabilidad
-                    for item in items_in_file:
+                    # Procesar cada item
+                    for item in df[id_col].dropna().unique():
+                        # Conservar versión original
+                        all_processed_items_original.add(item)
+                        # Crear versión normalizada (sin ceros a la izquierda)
+                        normalized_item = item.lstrip('0')
+                        all_processed_items_normalized.add(normalized_item)
+                        
+                        # Mapeo para trazabilidad
                         if item not in file_item_mapping:
                             file_item_mapping[item] = []
                         file_item_mapping[item].append(os.path.basename(file_path))
@@ -708,17 +721,34 @@ def process_all():
                 current_app.logger.error(f"Error procesando archivo {file_path}: {str(e)}")
                 continue
 
-        # Comparación final - Solo items en archivos que NO están en referencia
-        unmatched_items = all_processed_items - reference_set
+        # Realizar comparaciones considerando ceros a la izquierda
+        unmatched_items = set()
 
-        # Construcción del resultado manteniendo tu estructura original
+        # Primera pasada: comparación exacta (incluyendo ceros a la izquierda)
+        exact_matches = all_processed_items_original & reference_set_original
+
+        # Segunda pasada: comparación normalizada (sin ceros a la izquierda)
+        normalized_matches = all_processed_items_normalized & reference_set_normalized
+
+        # Identificar items no coincidentes
+        for item in all_processed_items_original:
+            # Verificar si no coincide ni exactamente ni en versión normalizada
+            if item not in exact_matches and item.lstrip('0') not in normalized_matches:
+                unmatched_items.add(item)
+
+        # Construcción del resultado
         comparison_results = {
-            "total_reference_items": len(reference_set),
-            "total_processed_items": len(all_processed_items),
-            "matched_items_count": len(all_processed_items) - len(unmatched_items),
+            "total_reference_items": len(reference_set_original),
+            "total_processed_items": len(all_processed_items_original),
+            "matched_items_count": len(exact_matches) + len(normalized_matches) - len(set([i.lstrip('0') for i in exact_matches]) & set([i.lstrip('0') for i in normalized_matches])),  # Evitar duplicados
             "unmatched_items": [{"item_id": item, "source_files": file_item_mapping.get(item, [])} for item in unmatched_items],
-            "match_percentage": round((len(all_processed_items) - len(unmatched_items)) / len(all_processed_items) * 100, 2) if all_processed_items else 0,
-            "files_with_missing_references": list(set(f for item in unmatched_items for f in file_item_mapping.get(item, [])))
+            "match_percentage": round((len(all_processed_items_original) - len(unmatched_items)) / len(all_processed_items_original) * 100, 2) if all_processed_items_original else 0,
+            "files_with_missing_references": list(set(f for item in unmatched_items for f in file_item_mapping.get(item, []))),
+            "validation_notes": {
+                "exact_matches": len(exact_matches),
+                "normalized_matches": len(normalized_matches),
+                "zero_padding_issues": len(normalized_matches) - len(exact_matches)
+            }
         }
 
         current_app.logger.info(f"Tiempo comparación: {time.time() - compare_time:.2f}s")
