@@ -2,7 +2,7 @@
 # More GitHub Actions for Azure: https://github.com/Azure/actions
 # More info on Python, GitHub Actions, and Azure App Service: https://aka.ms/python-webapps-actions
 
-name: Build and deploy Python app to Azure Web App - pomanager
+name: Build and deploy Flask app to Azure Web App - pomanager
 
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read #This is required for actions/checkout
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -22,7 +22,7 @@ jobs:
       - name: Set up Python version
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.10'  # Versión compatible con Azure Web Apps
 
       - name: Create and start virtual environment
         run: |
@@ -30,9 +30,10 @@ jobs:
           source venv/bin/activate
       
       - name: Install dependencies
-        run: pip install -r requirements.txt
-        
-      # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install gunicorn  # Necesario para producción en Azure
 
       - name: Zip artifact for deployment
         run: zip release.zip ./* -r
@@ -52,8 +53,8 @@ jobs:
       name: 'Production'
       url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
     permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
+      id-token: write
+      contents: read
 
     steps:
       - name: Download artifact from build job
@@ -64,13 +65,34 @@ jobs:
       - name: Unzip artifact for deployment
         run: unzip release.zip
 
-      
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_1E5384C65CE94D9AA1A680B84F7369EB }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_5F6BA439BBBA45719DE1E66BC44FD9E3 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_DAAEE5DF41814410A1B29EA1B597D1F9 }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID }}
+
+      - name: Configure Azure App Settings for Flask
+        run: |
+          az webapp config appsettings set \
+            --name pomanager \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --settings \
+              SUPABASE_URL="${{ secrets.SUPABASE_URL }}" \
+              SUPABASE_API_KEY="${{ secrets.SUPABASE_API_KEY }}" \
+              DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              FLASK_APP="app:app" \  # Cambiado a app:app para Gunicorn
+              FLASK_ENV="production" \
+              PYTHONPATH="/home/site/wwwroot" \
+              WEBSITE_PORT=8000 \
+              WEBSITES_ENABLE_APP_SERVICE_STORAGE=true
+
+      - name: Configure Gunicorn startup
+        run: |
+          az webapp config set \
+            --name pomanager \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --startup-file "gunicorn --bind=0.0.0.0:8000 --timeout 600 app:app"
 
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
@@ -78,11 +100,4 @@ jobs:
         with:
           app-name: 'pomanager'
           slot-name: 'Production'
-          app-settings: |
-            SUPABASE_URL=${{ secrets.SUPABASE_URL }}
-            SUPABASE_API_KEY=${{ secrets.SUPABASE_API_KEY }}
-            DATABASE_URL=${{ secrets.DATABASE_URL }}
-            FLASK_APP=app.py  
-            FLASK_ENV=production
-            PYTHONPATH=/home/site/wwwroot
-          
+          package: 'release.zip'
