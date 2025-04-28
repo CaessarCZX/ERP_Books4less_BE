@@ -78,4 +78,11 @@ jobs:
         with:
           app-name: 'pomanager'
           slot-name: 'Production'
+          app-settings: |
+            SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+            SUPABASE_API_KEY=${{ secrets.SUPABASE_API_KEY }}
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            FLASK_APP=app.py  
+            FLASK_ENV=production
+            PYTHONPATH=/home/site/wwwroot
           
