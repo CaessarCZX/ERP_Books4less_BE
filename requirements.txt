@@ -1,0 +1,17 @@
+Flask
+Flask-SQLAlchemy
+Flask-Cors
+psycopg2
+python-dotenv
+supabase 
+pandas
+numpy
+flask 
+openpyxl  
+PyMuPDF 
+openpyxl
+requests
+reportlab
+flask_cors
+bcrypt
+PyJWT
