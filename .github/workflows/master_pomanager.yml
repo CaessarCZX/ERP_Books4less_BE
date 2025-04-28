@@ -22,7 +22,7 @@ jobs:
       - name: Set up Python version
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'  # Versión compatible con Azure Web Apps
+          python-version: '3.10'
 
       - name: Create and start virtual environment
         run: |
@@ -33,7 +33,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install gunicorn  # Necesario para producción en Azure
+          pip install gunicorn
 
       - name: Zip artifact for deployment
         run: zip release.zip ./* -r
@@ -68,9 +68,9 @@ jobs:
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_1E5384C65CE94D9AA1A680B84F7369EB }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_5F6BA439BBBA45719DE1E66BC44FD9E3 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_DAAEE5DF41814410A1B29EA1B597D1F9 }}
 
       - name: Configure Azure App Settings for Flask
         run: |
@@ -81,7 +81,7 @@ jobs:
               SUPABASE_URL="${{ secrets.SUPABASE_URL }}" \
               SUPABASE_API_KEY="${{ secrets.SUPABASE_API_KEY }}" \
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-              FLASK_APP="app:app" \  # Cambiado a app:app para Gunicorn
+              FLASK_APP="app:app" \
               FLASK_ENV="production" \
               PYTHONPATH="/home/site/wwwroot" \
               WEBSITE_PORT=8000 \
@@ -101,3 +101,4 @@ jobs:
           app-name: 'pomanager'
           slot-name: 'Production'
           package: 'release.zip'
+
