@@ -86,6 +86,8 @@ jobs:
               PYTHONPATH="/home/site/wwwroot" \
               WEBSITE_PORT=8000 \
               WEBSITES_ENABLE_APP_SERVICE_STORAGE=true
+              WEBSITE_PYTHON_VERSION=3.10 \  # Versión específica de Python
+
 
       - name: Configure Gunicorn startup
         run: |
