@@ -65,9 +65,9 @@ jobs:
       - name: Login to Azure with GitHub OIDC
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_1E5384C65CE94D9AA1A680B84F7369EB }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_5F6BA439BBBA45719DE1E66BC44FD9E3 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_DAAEE5DF41814410A1B29EA1B597D1F9 }}
           enable-AzPSSession: true
           allow-no-subscriptions: true
 
