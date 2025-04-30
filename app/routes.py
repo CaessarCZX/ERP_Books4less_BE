@@ -37,6 +37,49 @@ delete_old_files()
 SECRET_KEY = "clavesupersecretanomanches"  # Cambia esto por tu clave segura
 ALGORITHM = "HS256"
 
+@main.route('/', methods=['GET'])
+def home():
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Backend Desplegado</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                text-align: center;
+                margin-top: 50px;
+                background-color: #f5f5f5;
+            }
+            .container {
+                background-color: white;
+                padding: 30px;
+                border-radius: 10px;
+                box-shadow: 0 0 10px rgba(0,0,0,0.1);
+                max-width: 600px;
+                margin: 0 auto;
+            }
+            h1 {
+                color: #2c3e50;
+            }
+            .status {
+                color: #27ae60;
+                font-weight: bold;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Backend de ERP Books4less</h1>
+            <p>El backend se ha desplegado correctamente en Azure.</p>
+            <p class="status">Estado: Funcionando</p>
+            <p>Resource Group: POManager</p>
+            <p>Ubicación: East US 2</p>
+        </div>
+    </body>
+    </html>
+    """
+
 # decorador para autenticacion de usuario 
 def token_required(role=None):
     def decorator(f):

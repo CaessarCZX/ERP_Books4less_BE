@@ -6,6 +6,10 @@ on:
       - master
   workflow_dispatch:
 
+env:
+  AZURE_RESOURCE_GROUP: 'POManager'  # Añadido con la capitalización correcta
+  AZURE_LOCATION: 'East US 2'        # Definido explícitamente
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -67,8 +71,15 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_5F6BA439BBBA45719DE1E66BC44FD9E3 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_DAAEE5DF41814410A1B29EA1B597D1F9 }}
 
+      - name: Validate Azure Resource Group
+        run: |
+          echo "Validating Resource Group: $AZURE_RESOURCE_GROUP"
+          az group show --name $AZURE_RESOURCE_GROUP || exit 1
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'pomanager'
           package: release.zip
+          resource-group: ${{ env.AZURE_RESOURCE_GROUP }}  # Añadido explícitamente
+          slot-name: 'production'
