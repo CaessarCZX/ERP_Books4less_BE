@@ -68,11 +68,18 @@ jobs:
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_1E5384C65CE94D9AA1A680B84F7369EB }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_5F6BA439BBBA45719DE1E66BC44FD9E3 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_DAAEE5DF41814410A1B29EA1B597D1F9 }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID }}
 
-      - name: Configure Azure App Settings for Flask
+      - name: Configure Python runtime
+        run: |
+          az webapp config set \
+            --name pomanager \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --linux-fx-version "PYTHON|3.10"
+
+      - name: Configure Azure App Settings
         run: |
           az webapp config appsettings set \
             --name pomanager \
@@ -81,12 +88,13 @@ jobs:
               SUPABASE_URL="${{ secrets.SUPABASE_URL }}" \
               SUPABASE_API_KEY="${{ secrets.SUPABASE_API_KEY }}" \
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-              FLASK_APP="app:app" \
+              FLASK_APP="app:create_app()" \
               FLASK_ENV="production" \
               PYTHONPATH="/home/site/wwwroot" \
               WEBSITE_PORT=8000 \
               WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
-              WEBSITE_PYTHON_VERSION=3.10
+              WEBSITE_PYTHON_VERSION=3.10 \
+              GUNICORN_CMD_ARGS="--timeout 600 --access-logfile - --error-logfile -"
 
           echo "Waiting for settings to apply..."
           sleep 30
@@ -96,9 +104,19 @@ jobs:
           az webapp config set \
             --name pomanager \
             --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --startup-file "gunicorn --bind=0.0.0.0:8000 --timeout 600 app:app"
+            --startup-file "gunicorn --bind=0.0.0.0:8000 --workers 4 --timeout 600 --access-logfile '-' --error-logfile '-' app:app"
 
-      - name: 'Deploy to Azure Web App'
+      - name: Enable logging
+        run: |
+          az webapp log config \
+            --name pomanager \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --docker-container-logging filesystem \
+            --application-logging true \
+            --web-server-logging filesystem \
+            --level verbose
+
+      - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
         with:
@@ -106,3 +124,9 @@ jobs:
           slot-name: 'Production'
           package: 'release.zip'
 
+      - name: Verify deployment
+        run: |
+          echo "Sleeping for 30 seconds to allow app to start..."
+          sleep 30
+          echo "Checking application health..."
+          curl -v https://pomanager-egb5emfxdnbfhdhf.eastus2-01.azurewebsites.net
