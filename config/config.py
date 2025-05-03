@@ -9,3 +9,4 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY")
+    PORT = os.getenv("PORT")
