@@ -121,69 +121,104 @@ def token_required(role=None):
 @main.route('/api/upload-excel', methods=['POST'])
 def upload_excel():
     """
-    Endpoint para subir archivos Excel directamente a Supabase sin procesamiento.
+    Endpoint para subir múltiples archivos Excel a Supabase.
     Los archivos se guardan en la carpeta 'xlsx/{user_id}/'
     """
     try:
-        # Verificar que se haya enviado un archivo
-        if 'file' not in request.files:
-            return jsonify({"error": "No se ha enviado ningún archivo"}), 400
+        # Verificar que se hayan enviado archivos
+        if 'files' not in request.files:
+            return jsonify({"error": "No se han enviado archivos"}), 400
             
-        file = request.files['file']
+        files = request.files.getlist('files')  # Lista de archivos
         user_id = request.form.get('user_id')
         
         # Validaciones básicas
         if not user_id:
             return jsonify({"error": "El parámetro user_id es requerido"}), 400
             
-        if file.filename == '':
-            return jsonify({"error": "Nombre de archivo vacío"}), 400
+        if len(files) == 0:
+            return jsonify({"error": "No se proporcionaron archivos"}), 400
             
-        # Verificar que sea un archivo Excel
-        file_extension = os.path.splitext(file.filename)[1].lower()
-        if file_extension not in ['.xlsx', '.xls']:
-            return jsonify({"error": "Solo se permiten archivos Excel (.xlsx, .xls)"}), 400
-        
-        # Crear nombre único para el archivo
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        original_filename = secure_filename(file.filename)
-        new_filename = f"{os.path.splitext(original_filename)[0]}_{timestamp}{file_extension}"
-        
-        # Guardar temporalmente el archivo
+        response_data = []
         temp_dir = os.path.join(UPLOAD_FOLDER, "temp_uploads")
         os.makedirs(temp_dir, exist_ok=True)
-        temp_path = os.path.join(temp_dir, new_filename)
-        file.save(temp_path)
-        
-        # Ruta de destino en Supabase
-        destination_path = f"xlsx/{user_id}/{new_filename}"
-        
-        # Subir a Supabase
-        upload_response = upload_to_supabase(temp_path, destination_path)
-        
-        # Eliminar archivo temporal
-        try:
-            os.remove(temp_path)
-        except Exception as e:
-            print(f"Error al eliminar archivo temporal: {e}")
-        
-        if not upload_response:
-            return jsonify({"error": "Error al subir el archivo a Supabase"}), 500
+
+        for file in files:
+            # Validar cada archivo individualmente
+            if file.filename == '':
+                response_data.append({
+                    "filename": file.filename,
+                    "error": "Nombre de archivo vacío",
+                    "success": False
+                })
+                continue
+                
+            # Verificar extensión
+            file_extension = os.path.splitext(file.filename)[1].lower()
+            if file_extension not in ['.xlsx', '.xls']:
+                response_data.append({
+                    "filename": file.filename,
+                    "error": "Formato no permitido (solo .xlsx, .xls)",
+                    "success": False
+                })
+                continue
             
-        # Obtener URL pública del archivo
-        try:
-            file_url = supabase.storage.from_('uploads').get_public_url(destination_path)
-        except Exception as e:
-            file_url = "URL no disponible"
-            print(f"Error al obtener URL pública: {e}")
+            # Procesar archivo válido
+            try:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                original_filename = secure_filename(file.filename)
+                new_filename = f"{os.path.splitext(original_filename)[0]}_{timestamp}{file_extension}"
+                temp_path = os.path.join(temp_dir, new_filename)
+                
+                file.save(temp_path)
+                
+                # Subir a Supabase
+                destination_path = f"xlsx/{user_id}/{new_filename}"
+                upload_success = upload_to_supabase(temp_path, destination_path)
+                
+                # Obtener URL pública (opcional)
+                file_url = ""
+                if upload_success:
+                    try:
+                        file_url = supabase.storage.from_('uploads').get_public_url(destination_path)
+                    except Exception as url_error:
+                        print(f"Error al obtener URL: {url_error}")
+                
+                # Registrar respuesta
+                response_data.append({
+                    "success": upload_success,
+                    "filename": new_filename,
+                    "original_filename": original_filename,
+                    "file_url": file_url if upload_success else "",
+                    "destination_path": destination_path if upload_success else "",
+                    "error": "" if upload_success else "Error al subir a Supabase"
+                })
+                
+            except Exception as file_error:
+                response_data.append({
+                    "filename": file.filename,
+                    "error": f"Error procesando archivo: {str(file_error)}",
+                    "success": False
+                })
+                
+            finally:
+                # Limpieza del archivo temporal
+                if 'temp_path' in locals():
+                    try:
+                        os.remove(temp_path)
+                    except Exception as cleanup_error:
+                        print(f"Error limpiando archivo temporal: {cleanup_error}")
+
+        # Estadísticas del proceso
+        success_count = sum(1 for item in response_data if item['success'])
         
         return jsonify({
-            "message": "Archivo Excel subido exitosamente",
-            "filename": new_filename,
-            "original_filename": original_filename,
-            "file_url": file_url,
-            "destination_path": destination_path
-        }), 200
+            "message": f"Proceso completado ({success_count}/{len(files)} archivos subidos)",
+            "results": response_data,
+            "total_files": len(files),
+            "successful_uploads": success_count,
+            "failed_uploads": len(files) - success_count
+        }), 200 if success_count > 0 else 207  # 207 = Multi-Status
         
     except Exception as e:
         return jsonify({

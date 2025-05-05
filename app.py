@@ -7,5 +7,5 @@ CORS(app)
 # CORS(app, resources={r"/api/*": {"origins": "http://localhost:5173"}}, supports_credentials=True)
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Usa el puerto de Azure o 8000 por default
+    port = int(os.environ.get("PORT", 8000)) 
     app.run(host="0.0.0.0", port=port)
