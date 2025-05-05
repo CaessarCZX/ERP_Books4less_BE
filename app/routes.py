@@ -74,7 +74,7 @@ def home():
             <p>El backend se ha desplegado correctamente en Azure.</p>
             <p class="status">Estado: Funcionando</p>
             <p>Resource Group: POManager</p>
-            <p>Ubicación: East US 2</p>
+            <p>Ubicación: US EST</p>
         </div>
     </body>
     </html>
