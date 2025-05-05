@@ -1,7 +1,6 @@
 
-import io
 import os
-import uuid
+import tempfile
 import traceback
 import time
 import bcrypt
@@ -440,70 +439,104 @@ def upload_reference():
             return jsonify({"error": "Formato no soportado"}), 400
 
         try:
-            if ext == 'xlsx':
-                df = pd.read_excel(file)
-            else:
-                sample = file.stream.read(1024).decode('utf-8')
-                file.stream.seek(0)
-                delimiter = ',' if ',' in sample else ';'
-                df = pd.read_csv(file, delimiter=delimiter)
-                
-            print(f"Registros totales en archivo: {len(df)}")
-            
-            df.columns = df.columns.str.strip().str.lower()
-            if not all(col in df.columns for col in ['no.', 'description']):
-                return jsonify({"error": "El archivo debe contener columnas 'No.' y 'Description'"}), 400
-
-            # Limpieza y conversión segura a tipos nativos
-            df = df[['no.', 'description']].fillna({'no.': '', 'description': ''})
-            df['no.'] = df['no.'].astype(str).str.strip()
-            df['description'] = df['description'].astype(str).str.strip()
-
-            # Preparar registros asegurando tipos serializables
-            records = []
-            for _, row in df.iterrows():
-                records.append({
-                    'item_number': str(row['no.']),
-                    'description': str(row['description']),
-                    'source_file': secure_filename(file.filename)
-                })
-
-            print(f"Registros preparados para inserción: {len(records)}")
-
+            # Save file temporarily to avoid streaming issues
+            temp_path = None
             try:
-                # Eliminar existentes
-                supabase.table('item_reference').delete().neq('id', 0).execute()
-                
-                if records:
-                    batch_size = 1000
-                    total_inserted = 0
-                    
-                    for i in range(0, len(records), batch_size):
-                        batch = records[i:i + batch_size]
-                        response = supabase.table('item_reference').insert(batch).execute()
-                        if response.data:
-                            total_inserted += len(response.data)
-                    
-                    print(f"Registros insertados exitosamente: {total_inserted}")
-                    return jsonify({
-                        "message": f"Base de datos actualizada. {total_inserted} items subidos",
-                        "total_items": total_inserted
-                    }), 200
+                if ext == 'xlsx':
+                    # Create temp file for Excel to avoid memory issues
+                    temp_path = os.path.join(tempfile.gettempdir(), secure_filename(file.filename))
+                    file.save(temp_path)
+                    df = pd.read_excel(temp_path, engine='openpyxl')
                 else:
+                    # For CSV, we can process in memory
+                    sample = file.stream.read(1024).decode('utf-8')
+                    file.stream.seek(0)
+                    delimiter = ',' if ',' in sample else ';'
+                    df = pd.read_csv(file, delimiter=delimiter, encoding='utf-8')
+                
+                print(f"Registros totales en archivo: {len(df)}")
+                
+                # Normalize column names
+                df.columns = df.columns.str.strip().str.lower()
+                required_columns = ['no.', 'description']
+                if not all(col in df.columns for col in required_columns):
                     return jsonify({
-                        "message": "Base de datos vaciada. No hay datos para insertar.",
-                        "total_items": 0
-                    }), 200
-                    
-            except Exception as e:
-                current_app.logger.error(f"Error en inserción: {str(e)}", exc_info=True)
-                return jsonify({
-                    "error": "Error al actualizar la base de datos",
-                    "details": str(e)
-                }), 500
+                        "error": f"El archivo debe contener columnas: {', '.join(required_columns)}",
+                        "columns_found": list(df.columns)
+                    }), 400
 
+                # Clean data safely
+                df = df[required_columns].copy()
+                df = df.fillna('')
+                df['no.'] = df['no.'].astype(str).str.strip()
+                df['description'] = df['description'].astype(str).str.strip()
+
+                # Filter out empty rows
+                df = df[(df['no.'] != '') & (df['description'] != '')]
+
+                # Prepare records with validation
+                records = []
+                for _, row in df.iterrows():
+                    records.append({
+                        'item_number': str(row['no.'])[:100],  # Limit length
+                        'description': str(row['description'])[:500],  # Limit length
+                        'source_file': secure_filename(file.filename)[:255]
+                    })
+
+                print(f"Registros válidos preparados para inserción: {len(records)}")
+
+                try:
+                    # Delete existing records in batches to avoid timeouts
+                    batch_size = 1000
+                    total_deleted = 0
+                    while True:
+                        result = supabase.table('item_reference').delete().neq('id', 0).limit(batch_size).execute()
+                        if not result.data or len(result.data) == 0:
+                            break
+                        total_deleted += len(result.data)
+                    
+                    print(f"Registros eliminados: {total_deleted}")
+
+                    # Insert new records in batches
+                    if records:
+                        total_inserted = 0
+                        for i in range(0, len(records), batch_size):
+                            batch = records[i:i + batch_size]
+                            response = supabase.table('item_reference').insert(batch).execute()
+                            if response.data:
+                                total_inserted += len(response.data)
+                        
+                        print(f"Registros insertados exitosamente: {total_inserted}")
+                        return jsonify({
+                            "message": f"Base de datos actualizada. {total_inserted} items subidos",
+                            "total_items": total_inserted
+                        }), 200
+                    else:
+                        return jsonify({
+                            "message": "Base de datos vaciada. No hay datos válidos para insertar.",
+                            "total_items": 0
+                        }), 200
+                        
+                except Exception as e:
+                    current_app.logger.error(f"Error en operación de base de datos: {str(e)}", exc_info=True)
+                    return jsonify({
+                        "error": "Error al actualizar la base de datos",
+                        "details": str(e)
+                    }), 500
+
+            finally:
+                # Clean up temp file if it exists
+                if temp_path and os.path.exists(temp_path):
+                    os.remove(temp_path)
+
+        except pd.errors.EmptyDataError:
+            return jsonify({"error": "El archivo está vacío"}), 400
         except Exception as e:
-            return jsonify({"error": f"Error al procesar archivo: {str(e)}"}), 400
+            current_app.logger.error(f"Error al procesar archivo: {str(e)}", exc_info=True)
+            return jsonify({
+                "error": "Error al procesar el archivo",
+                "details": str(e)
+            }), 400
 
     except Exception as e:
         current_app.logger.error(f"Error inesperado: {str(e)}", exc_info=True)
