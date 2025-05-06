@@ -80,10 +80,10 @@ def process_file(input_file, discount_percent):
     try:
         # Columnas requeridas
         required_columns = [
-            'series_code', 'series_desc', 'pallet_id', 'pallet_available_flag',
-            'item_id', 'item_desc', 'family_code', 'reporting_group_desc',
-            'publisher_desc', 'imprint_desc', 'us_price', 'can_price',
-            'pub_date', 'quantity'
+            'series_desc', 'pallet_id',
+            'item_id', 'item_desc',
+            'us_price', 
+            'quantity'
         ]
         
         # Leer el archivo
