@@ -474,6 +474,9 @@ def upload_reference():
                 # Filter out empty rows
                 df = df[(df['no.'] != '') & (df['description'] != '')]
 
+                # Remove duplicates by 'no.' column to avoid DB constraint violation
+                df = df.drop_duplicates(subset=['no.'])
+
                 # Prepare records with validation
                 records = []
                 for _, row in df.iterrows():
@@ -490,10 +493,16 @@ def upload_reference():
                     batch_size = 1000
                     total_deleted = 0
                     while True:
-                        result = supabase.table('item_reference').delete().neq('id', 0).limit(batch_size).execute()
-                        if not result.data or len(result.data) == 0:
-                            break
-                        total_deleted += len(result.data)
+                        # Obtener los primeros N IDs que no sean 0
+                        fetch = supabase.table('item_reference').select('id').neq('id', 0).limit(batch_size).execute()
+                        ids_to_delete = [row['id'] for row in fetch.data]
+
+                        if not ids_to_delete:
+                            break  # No hay más registros a eliminar
+
+                        # Borrar esos registros por lote
+                        result = supabase.table('item_reference').delete().in_('id', ids_to_delete).execute()
+                        total_deleted += len(ids_to_delete)
                     
                     print(f"Registros eliminados: {total_deleted}")
 
