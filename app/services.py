@@ -291,10 +291,16 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
             tbl.wrapOn(c, width, height)
             tbl.drawOn(c, 50, y_start - row_h*(len(rows)+1))
 
+            # ======= AGREGAR ESTAS LÍNEAS PARA NUMERACIÓN DE PÁGINA =======
+            page_number = f"Page {pi + 1} of {len(chunks)}"
+            c.drawRightString(width - 50, 30, page_number)
+
         # Pie de página
         c.setFont("Helvetica",8)
         c.drawString(50,30, f"Generated on: {datetime.now():%m/%d/%Y %H:%M}")
         c.save()
+
+        
 
         return {"message": f"PDF creado exitosamente: {output_pdf}"}
 
