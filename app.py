@@ -15,5 +15,5 @@ CORS(
 )
 
 if __name__ == "__main__":
-    port = int(Config.PORT)
-    app.run(port=port)
+        port = int(Config.PORT)
+        app.run(port=port)

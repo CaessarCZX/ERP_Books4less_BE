@@ -146,17 +146,23 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
             return {"error": f"Faltan columnas: {', '.join(miss)}"}
 
         # Limpieza y cálculos
+        # Elimina el símbolo de dólar y convierte a número
+        df['us_price'] = df['us_price'].replace('[\$,]', '', regex=True).astype(float)
         df['quantity'] = pd.to_numeric(df['quantity'], errors='coerce').fillna(0)
-        df['us_price']  = pd.to_numeric(df['us_price'],  errors='coerce').fillna(0)
+
+        # Calcula el total sin descuento
         df['Extended Retail'] = df['quantity'] * df['us_price']
-        df['Extended @ %']    = df['Extended Retail'] * (discount_percent / 100)
-        df['Extended Price']  = df['Extended @ %'] * df['quantity']
+
+        # Aplica el descuento (por ejemplo, 20%)
+        discount_percent = discount_percent  # puedes cambiarlo o hacerlo variable por fila
+        df['Extended @ %'] = df['Extended Retail'] * (discount_percent / 100)
+
 
         # Agrupar por pallet_id
         grouped = df.groupby('pallet_id').agg({
             'series_desc':'first',
             'quantity':'sum',
-            'Extended Price':'sum'
+            'Extended @ %':'sum'
         }).reset_index()
 
         # Inicializar canvas
@@ -175,12 +181,12 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
                 row['pallet_id'],
                 desc,
                 int(row['quantity']),
-                f"${row['Extended Price']:,.2f}"
+                f"${row['Extended @ %']:,.2f}"
             ])
 
         # Totales
         total_qty = int(grouped['quantity'].sum())
-        total_ext = grouped['Extended Price'].sum()
+        total_ext = grouped['Extended @ %'].sum()
         total_row = ["","","TOTAL:", total_qty, f"${total_ext:,.2f}"]
 
         # Parámetros de tabla y paginación
@@ -196,100 +202,104 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
             if pi > 0:
                 c.showPage()
 
-            # === ENCABEZADO EN TODAS LAS PÁGINAS ===
-            c.setFont("Helvetica-Bold", 14)
-            c.drawString(50, height - 40, "Book For Less LLC")
-            c.setFont("Helvetica", 10)
-            c.drawString(50, height - 55, "P.O. Box 344")
-            c.drawString(50, height - 70, "New York, NY 10001")
+        # === ENCABEZADO EN TODAS LAS PÁGINAS ===
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(50, height - 40, "Book For Less LLC")
+        c.setFont("Helvetica", 10)
+        c.drawString(50, height - 55, "P.O. Box 344")
+        c.drawString(50, height - 70, "New York, NY 10001")
 
-            # Purchase Order / Date
-            po = [
-                ["Purchase Order", form_data.get('purchase_info','N/A')],
-                ["Date",           form_data.get('order_date','N/A')]
-            ]
-            t_po = Table(po, colWidths=[100,100])
-            t_po.setStyle(TableStyle([
-                ('GRID', (0,0),(-1,-1),1,colors.black),
-                ('BACKGROUND',(0,0),(1,0),colors.lightgrey),
-                ('ALIGN',(0,0),(-1,-1),'CENTER'),
-                ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-                ('FONTSIZE',(0,0),(-1,-1),9),
-            ]))
-            t_po.wrapOn(c,width,height)
-            t_po.drawOn(c, width-275, height-90)
+        # Purchase Order / Date
+        po = [
+            ["Purchase Order", form_data.get('purchase_info','N/A')],
+            ["Date",           form_data.get('order_date','N/A')]
+        ]
+        t_po = Table(po, colWidths=[100,100])
+        t_po.setStyle(TableStyle([
+            ('GRID', (0,0),(-1,-1),1,colors.black),
+            ('BACKGROUND',(0,0),(1,0),colors.lightgrey),
+            ('ALIGN',(0,0),(-1,-1),'CENTER'),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('FONTSIZE',(0,0),(-1,-1),9),
+        ]))
+        t_po.wrapOn(c,width,height)
+        t_po.drawOn(c, width-275, height-90)
 
-            # Vendor
-            vd = [
-                ["Vendor:"],
-                [form_data.get("seller_name","")],
-                [form_data.get("seller_PO","")],
-                [form_data.get("seller_address","")]
-            ]
-            t_vd = Table(vd, colWidths=[225])
-            t_vd.setStyle(TableStyle([
-                ('GRID',(0,0),(-1,-1),1,colors.black),
-                ('BACKGROUND',(0,0),(-1,0),colors.lightgrey),
-                ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-                ('FONTSIZE',(0,0),(-1,-1),9),
-                ('LEFTPADDING',(0,0),(-1,-1),4),
-            ]))
-            t_vd.wrapOn(c,width,height)
-            t_vd.drawOn(c,50, height-180)
+        # Vendor
+        vd = [
+            ["Vendor:"],
+            [form_data.get("seller_name","")],
+            [form_data.get("seller_PO","")],
+            [form_data.get("seller_address","")]
+        ]
+        t_vd = Table(vd, colWidths=[225])
+        t_vd.setStyle(TableStyle([
+            ('GRID',(0,0),(-1,-1),1,colors.black),
+            ('BACKGROUND',(0,0),(-1,0),colors.lightgrey),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('FONTSIZE',(0,0),(-1,-1),9),
+            ('LEFTPADDING',(0,0),(-1,-1),4),
+        ]))
+        t_vd.wrapOn(c,width,height)
+        t_vd.drawOn(c,50, height-180)
 
-            # Ship To
-            st = [
-                ["Ship To:"],
-                [form_data.get("company_name","")],
-                [form_data.get("company_address","")],
-                [form_data.get("company_info","")]
-            ]
-            t_st = Table(st, colWidths=[225])
-            t_st.setStyle(TableStyle([
-                ('GRID',(0,0),(-1,-1),1,colors.black),
-                ('BACKGROUND',(0,0),(-1,0),colors.lightgrey),
-                ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-                ('FONTSIZE',(0,0),(-1,-1),9),
-                ('LEFTPADDING',(0,0),(-1,-1),4),
-            ]))
-            t_st.wrapOn(c,width,height)
-            t_st.drawOn(c, width-300, height-180)
+        # Ship To
+        st = [
+            ["Ship To:"],
+            [form_data.get("company_name","")],
+            [form_data.get("company_address","")],
+            [form_data.get("company_info","")]
+        ]
+        t_st = Table(st, colWidths=[225])
+        t_st.setStyle(TableStyle([
+            ('GRID',(0,0),(-1,-1),1,colors.black),
+            ('BACKGROUND',(0,0),(-1,0),colors.lightgrey),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('FONTSIZE',(0,0),(-1,-1),9),
+            ('LEFTPADDING',(0,0),(-1,-1),4),
+        ]))
+        t_st.wrapOn(c,width,height)
+        t_st.drawOn(c, width-300, height-180)
 
-            # Shipping / Payment Terms
-            sp = [
-                ["Shipping Method","Payment Terms"],
-                [form_data.get('shipping_method','N/A'),
-                 form_data.get('payment_terms',    'N/A')]
-            ]
-            t_sp = Table(sp, colWidths=[249,249])
-            t_sp.setStyle(TableStyle([
-                ('GRID',(0,0),(-1,-1),1,colors.black),
-                ('BACKGROUND',(0,0),(-1,0),colors.lightgrey),
-                ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-                ('FONTSIZE',(0,0),(-1,-1),9),
-                ('LEFTPADDING',(0,0),(-1,-1),4),
-            ]))
-            t_sp.wrapOn(c,width,height)
-            t_sp.drawOn(c,50, height-250)
+        # Shipping / Payment Terms
+        sp = [
+            ["Shipping Method","Payment Terms"],
+            [form_data.get('shipping_method','N/A'),
+            form_data.get('payment_terms',    'N/A')]
+        ]
+        t_sp = Table(sp, colWidths=[249,249])
+        t_sp.setStyle(TableStyle([
+            ('GRID',(0,0),(-1,-1),1,colors.black),
+            ('BACKGROUND',(0,0),(-1,0),colors.lightgrey),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('FONTSIZE',(0,0),(-1,-1),9),
+            ('LEFTPADDING',(0,0),(-1,-1),4),
+        ]))
+        t_sp.wrapOn(c,width,height)
+        t_sp.drawOn(c,50, height-250)
 
-            # === TABLA DE PRODUCTOS ===
-            y_start = height - 300
-            data = [header] + rows
-            if pi == len(chunks)-1:
-                data.append(total_row)
+        # === TABLA DE PRODUCTOS ===
+        y_start = height - 300
+        data = [header] + rows
+        if pi == len(chunks)-1:
+            data.append(total_row)
 
-            tbl = Table(data, colWidths=[30,80,228,70,90])
-            tbl.setStyle(TableStyle([
-                ('GRID',(0,0),(-1,-1),1,colors.black),
-                ('BACKGROUND',(0,0),(-1,0),colors.grey),
-                ('TEXTCOLOR',(0,0),(-1,0),colors.whitesmoke),
-                ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-                ('ALIGN',(0,0),(-1,-1),'CENTER'),
-                ('ALIGN',(2,1),(2,-1),'LEFT'),
-                ('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.whitesmoke,colors.white]),
-            ]))
-            tbl.wrapOn(c, width, height)
-            tbl.drawOn(c, 50, y_start - row_h*(len(rows)+1))
+        tbl = Table(data, colWidths=[30,80,228,70,90])
+        tbl.setStyle(TableStyle([
+            ('GRID',(0,0),(-1,-1),1,colors.black),
+            ('BACKGROUND',(0,0),(-1,0),colors.grey),
+            ('TEXTCOLOR',(0,0),(-1,0),colors.whitesmoke),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('ALIGN',(0,0),(-1,-1),'CENTER'),
+            ('ALIGN',(2,1),(2,-1),'LEFT'),
+            ('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.whitesmoke,colors.white]),
+        ]))
+        tbl.wrapOn(c, width, height)
+        tbl.drawOn(c, 50, y_start - row_h*(len(rows)+1))
+
+        # ======= AGREGAR ESTAS LÍNEAS PARA NUMERACIÓN DE PÁGINA =======
+        page_number = f"Page {pi + 1} of {len(chunks)}"
+        c.drawRightString(width - 50, 30, page_number)
 
             # ======= AGREGAR ESTAS LÍNEAS PARA NUMERACIÓN DE PÁGINA =======
             page_number = f"Page {pi + 1} of {len(chunks)}"
@@ -305,7 +315,7 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
         return {"message": f"PDF creado exitosamente: {output_pdf}"}
 
     except Exception as e:
-        return {"error": str(e)}
+        return {"error":str(e)}
 
     
 def create_csv(input_file, output_csv):
