@@ -302,8 +302,8 @@ def create_pdf(input_file, output_pdf, discount_percent, form_data=None):
         c.drawRightString(width - 50, 30, page_number)
 
             # ======= AGREGAR ESTAS LÍNEAS PARA NUMERACIÓN DE PÁGINA =======
-            page_number = f"Page {pi + 1} of {len(chunks)}"
-            c.drawRightString(width - 50, 30, page_number)
+        page_number = f"Page {pi + 1} of {len(chunks)}"
+        c.drawRightString(width - 50, 30, page_number)
 
         # Pie de página
         c.setFont("Helvetica",8)
