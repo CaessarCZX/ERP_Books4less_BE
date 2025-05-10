@@ -471,7 +471,11 @@ def upload_reference():
                 }), 400
 
             # Clean data safely
-            df = df[required_columns].copy().fillna('')
+            df = df[required_columns].copy()
+            try:
+                df = df.fillna('')
+            except Exception:
+                current_app.logger.exception(f"[DEBUG] fillna falló para DataFrame")
             df['no.'] = df['no.'].astype(str).str.strip()
             df['description'] = df['description'].astype(str).str.strip()
             df = df[(df['no.'] != '') & (df['description'] != '')]
@@ -542,6 +546,9 @@ def upload_reference():
 
         except pd.errors.EmptyDataError:
             return jsonify({"error": "El archivo está vacío"}), 400
+        except SystemExit as e:
+            current_app.logger.error(f"[DEBUG] Capturado SystemExit: {e}", exc_info=True)
+            return jsonify({"error": "Error interno de procesamiento de datos", "details": str(e)}), 500
         except Exception as e:
             current_app.logger.error(f"Error al procesar archivo: {str(e)}", exc_info=True)
             return jsonify({
@@ -554,12 +561,16 @@ def upload_reference():
             if temp_path and os.path.exists(temp_path):
                 os.remove(temp_path)
 
+    except SystemExit as e:
+        current_app.logger.error(f"[DEBUG] Capturado SystemExit en nivel superior: {e}", exc_info=True)
+        return jsonify({"error": "Error interno del servidor", "details": str(e)}), 500
     except Exception as e:
         current_app.logger.error(f"Error inesperado: {str(e)}", exc_info=True)
         return jsonify({
             "error": "Error interno del servidor",
             "details": str(e)
         }), 500
+
 
 
         
