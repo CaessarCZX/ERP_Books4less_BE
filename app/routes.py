@@ -426,117 +426,119 @@ def get_reference_items():
 @main.route('/api/upload-reference', methods=['POST'])
 def upload_reference():
     try:
+        # 1) Verificar que venga el archivo
         if 'file' not in request.files:
             return jsonify({"error": "El archivo es requerido"}), 400
 
         file = request.files['file']
 
-        if file.filename == '':
-            return jsonify({"error": "Nombre de archivo no válido"}), 400
+        # — DEBUG: Registrar el filename crudo antes de secure_filename
+        raw_name = getattr(file, 'filename', None)
+        current_app.logger.debug(f"[DEBUG] raw file.filename = {raw_name!r}")
+        if not raw_name:
+            current_app.logger.error("[DEBUG] ¡filename vacío o None!")
+            return jsonify({"error": "No se recibió un nombre de archivo válido"}), 400
 
-        ext = file.filename.split('.')[-1].lower()
+        # 2) Validación de extensión
+        ext = raw_name.split('.')[-1].lower()
         if ext not in ['csv', 'xlsx']:
             return jsonify({"error": "Formato no soportado"}), 400
 
         try:
             # Save file temporarily to avoid streaming issues
             temp_path = None
+            if ext == 'xlsx':
+                temp_path = os.path.join(tempfile.gettempdir(), secure_filename(raw_name))
+                file.save(temp_path)
+                df = pd.read_excel(temp_path, engine='openpyxl')
+            else:
+                sample = file.stream.read(1024).decode('utf-8')
+                file.stream.seek(0)
+                delimiter = ',' if ',' in sample else ';'
+                df = pd.read_csv(file, delimiter=delimiter, encoding='utf-8')
+
+            # Mantener print para consola
+            print(f"Registros totales en archivo: {len(df)}")
+            current_app.logger.debug(f"[DEBUG] Registros totales en archivo: {len(df)}")
+
+            # Normalize column names
+            df.columns = df.columns.str.strip().str.lower()
+            required_columns = ['no.', 'description']
+            if not all(col in df.columns for col in required_columns):
+                return jsonify({
+                    "error": f"El archivo debe contener columnas: {', '.join(required_columns)}",
+                    "columns_found": list(df.columns)
+                }), 400
+
+            # Clean data safely
+            df = df[required_columns].copy().fillna('')
+            df['no.'] = df['no.'].astype(str).str.strip()
+            df['description'] = df['description'].astype(str).str.strip()
+            df = df[(df['no.'] != '') & (df['description'] != '')]
+            df = df.drop_duplicates(subset=['no.'])
+
+            # 3) Proteger secure_filename con try/except
             try:
-                if ext == 'xlsx':
-                    # Create temp file for Excel to avoid memory issues
-                    temp_path = os.path.join(tempfile.gettempdir(), secure_filename(file.filename))
-                    file.save(temp_path)
-                    df = pd.read_excel(temp_path, engine='openpyxl')
-                else:
-                    # For CSV, we can process in memory
-                    sample = file.stream.read(1024).decode('utf-8')
-                    file.stream.seek(0)
-                    delimiter = ',' if ',' in sample else ';'
-                    df = pd.read_csv(file, delimiter=delimiter, encoding='utf-8')
-                
-                print(f"Registros totales en archivo: {len(df)}")
-                
-                # Normalize column names
-                df.columns = df.columns.str.strip().str.lower()
-                required_columns = ['no.', 'description']
-                if not all(col in df.columns for col in required_columns):
-                    return jsonify({
-                        "error": f"El archivo debe contener columnas: {', '.join(required_columns)}",
-                        "columns_found": list(df.columns)
-                    }), 400
+                safe_name = secure_filename(raw_name)[:255]
+            except Exception:
+                current_app.logger.exception(f"[DEBUG] secure_filename falló para {raw_name!r}")
+                safe_name = 'uploaded_file'
 
-                # Clean data safely
-                df = df[required_columns].copy()
-                df = df.fillna('')
-                df['no.'] = df['no.'].astype(str).str.strip()
-                df['description'] = df['description'].astype(str).str.strip()
+            # Prepare records with validation
+            records = []
+            for _, row in df.iterrows():
+                records.append({
+                    'item_number': str(row['no.'])[:100],  # Limit length
+                    'description': str(row['description'])[:500],  # Limit length
+                    'source_file': safe_name
+                })
 
-                # Filter out empty rows
-                df = df[(df['no.'] != '') & (df['description'] != '')]
+            # Mantener print para consola
+            print(f"Registros válidos preparados para inserción: {len(records)}")
+            current_app.logger.debug(f"[DEBUG] Registros válidos preparados para inserción: {len(records)}")
 
-                # Remove duplicates by 'no.' column to avoid DB constraint violation
-                df = df.drop_duplicates(subset=['no.'])
+            try:
+                # Delete existing records in batches to avoid timeouts
+                batch_size = 1000
+                total_deleted = 0
+                while True:
+                    fetch = supabase.table('item_reference').select('id').neq('id', 0).limit(batch_size).execute()
+                    ids_to_delete = [row['id'] for row in fetch.data]
 
-                # Prepare records with validation
-                records = []
-                for _, row in df.iterrows():
-                    records.append({
-                        'item_number': str(row['no.'])[:100],  # Limit length
-                        'description': str(row['description'])[:500],  # Limit length
-                        'source_file': secure_filename(file.filename)[:255]
-                    })
+                    if not ids_to_delete:
+                        break
 
-                print(f"Registros válidos preparados para inserción: {len(records)}")
+                    supabase.table('item_reference').delete().in_('id', ids_to_delete).execute()
+                    total_deleted += len(ids_to_delete)
 
-                try:
-                    # Delete existing records in batches to avoid timeouts
-                    batch_size = 1000
-                    total_deleted = 0
-                    while True:
-                        # Obtener los primeros N IDs que no sean 0
-                        fetch = supabase.table('item_reference').select('id').neq('id', 0).limit(batch_size).execute()
-                        ids_to_delete = [row['id'] for row in fetch.data]
+                # Mantener print para consola
+                print(f"Registros eliminados: {total_deleted}")
+                current_app.logger.debug(f"[DEBUG] Registros eliminados: {total_deleted}")
 
-                        if not ids_to_delete:
-                            break  # No hay más registros a eliminar
+                # Insert new records in batches
+                total_inserted = 0
+                if records:
+                    for i in range(0, len(records), batch_size):
+                        batch = records[i:i + batch_size]
+                        response = supabase.table('item_reference').insert(batch).execute()
+                        if response.data:
+                            total_inserted += len(response.data)
 
-                        # Borrar esos registros por lote
-                        result = supabase.table('item_reference').delete().in_('id', ids_to_delete).execute()
-                        total_deleted += len(ids_to_delete)
-                    
-                    print(f"Registros eliminados: {total_deleted}")
+                # Mantener print para consola
+                print(f"Registros insertados exitosamente: {total_inserted}")
+                current_app.logger.debug(f"[DEBUG] Registros insertados exitosamente: {total_inserted}")
 
-                    # Insert new records in batches
-                    if records:
-                        total_inserted = 0
-                        for i in range(0, len(records), batch_size):
-                            batch = records[i:i + batch_size]
-                            response = supabase.table('item_reference').insert(batch).execute()
-                            if response.data:
-                                total_inserted += len(response.data)
-                        
-                        print(f"Registros insertados exitosamente: {total_inserted}")
-                        return jsonify({
-                            "message": f"Base de datos actualizada. {total_inserted} items subidos",
-                            "total_items": total_inserted
-                        }), 200
-                    else:
-                        return jsonify({
-                            "message": "Base de datos vaciada. No hay datos válidos para insertar.",
-                            "total_items": 0
-                        }), 200
-                        
-                except Exception as e:
-                    current_app.logger.error(f"Error en operación de base de datos: {str(e)}", exc_info=True)
-                    return jsonify({
-                        "error": "Error al actualizar la base de datos",
-                        "details": str(e)
-                    }), 500
+                return jsonify({
+                    "message": f"Base de datos actualizada. {total_inserted} items subidos",
+                    "total_items": total_inserted
+                }), 200
 
-            finally:
-                # Clean up temp file if it exists
-                if temp_path and os.path.exists(temp_path):
-                    os.remove(temp_path)
+            except Exception as e:
+                current_app.logger.error(f"Error en operación de base de datos: {str(e)}", exc_info=True)
+                return jsonify({
+                    "error": "Error al actualizar la base de datos",
+                    "details": str(e)
+                }), 500
 
         except pd.errors.EmptyDataError:
             return jsonify({"error": "El archivo está vacío"}), 400
@@ -547,12 +549,19 @@ def upload_reference():
                 "details": str(e)
             }), 400
 
+        finally:
+            # Clean up temp file if it exists
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+
     except Exception as e:
         current_app.logger.error(f"Error inesperado: {str(e)}", exc_info=True)
         return jsonify({
             "error": "Error interno del servidor",
             "details": str(e)
         }), 500
+
+
         
 def consolidate_files(file_paths):
     """
